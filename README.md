@@ -99,13 +99,15 @@ snakemake -j $NUMBER_OF_JOBS all
 
 After this, the `data` directory should be filled with lots of files of various formats, many which contain relevant virological information.
 
-### Visualize outputs
+### Outputs
+
+To bring up a directory tree of the `data` directory where you will find files of interest and be able to view certain plots, run:
 
 ```
 python mlip/visualization.py
 ```
 
-All paths below are assumed to be relative to the `data` directory. Anything enclosed in brackets are [Snakemake wildcards](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#snakefiles-wildcards) with further explanation in documentation. Relevant outputs include:
+Alternatively, just explore the data directory from your desktop. All paths below are assumed to be relative to the `data` directory. Anything enclosed in brackets are [Snakemake wildcards](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#snakefiles-wildcards) with further explanation in documentation. Relevant outputs include:
 
 | File description                        | File path                                                     |
 | --------------------------------------- | ------------------------------------------------------------- |
