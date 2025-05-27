@@ -113,6 +113,63 @@ We use YAML (a practice recommended by Snakemake) to configure both tools and ru
 -   **`variants_minimum_frequency: .01`**: The minimum allele frequency a variant must reach to be reported by variant calling. This filters out very low-frequency potential errors
 -   **`strand_filter: 1`**: Enable a filter that checks if variants are supported by reads from both DNA strands (helps remove artifacts). Ignore variants with greater than 90% support on only one strand.
 
+### References
+
+#### Standard usage
+
+As explained in the quick start, simply chose something from the `reference` columns (e.g `h5n1`, `h3n2`) for the config:
+
+```
+reference: "h5n1"
+```
+
+#### Overriding
+
+To override or add your own segment‐accession mapping, edit `references.tsv`:
+
+```
+reference segment_key genbank_accession
+custom_gb HA XYZ123
+custom_gb NA XYZ124
+...
+```
+
+Change the `genbank_accession` field to your desired accessions and edit the config accordingly, e.g.:
+
+```
+reference: "custom_gb"
+```
+
+#### ZIP mode for custom references
+
+Specify a path to a custom reference zip:
+```
+reference: "path/to/reference.zip"
+```
+
+Upon running dataflow, this unzips into:
+
+```
+data/reference/
+├─ SEGMENT1/
+│    ├─ sequence.fasta
+│    └─ metadata.gb
+├─ SEGMENT2/
+│    ├─ sequence.fasta
+│    └─ metadata.gb
+└─ …
+```
+
+**Expected structure**:
+Each `data/reference/SEGMENT/` folder must match the segment key (e.g. `HA`, `NA`) and contain exactly:
+- `sequence.fasta`
+- `metadata.gb`
+
+Note that zips were intentionally crafted this way and are available upon request.
+
+A short comment on rule logic: If `reference` ends in `.zip`, Snakemake skips the `fetch_reference_data` rule and uses the unzipped files. Otherwise, it runs `fetch_reference_data` to pull each `<segment>.gb` and `<segment>.fasta` from NCBI before converting to GTF and concatenating.
+
+
 ## 3. Tools utilized
 
 We use a wide variety of tools. Below goes over each step of the pipeline. This pipeline utilizes [Snakemake](https://snakemake.readthedocs.io/en/stable/), [Bioconda](https://bioconda.github.io/), [BioPython](https://biopython.org/), [Pandas](https://pandas.pydata.org/), [Genbank records](https://www.ncbi.nlm.nih.gov/genbank/samplerecord/), [GTF format](https://genome.ucsc.edu/FAQ/FAQformat.html#format4), [Trimmomatic](https://academic.oup.com/bioinformatics/article/30/15/2114/2390096), [Bowtie2](https://www.nature.com/articles/nmeth.1923), [SAMtools](https://academic.oup.com/bioinformatics/article/25/16/2078/204688), [VarScan](https://genome.cshlp.org/content/22/3/568.short), [BEDTools](https://academic.oup.com/bioinformatics/article/26/6/841/244688), [SeqKit](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0163962), [MultiQC](https://academic.oup.com/bioinformatics/article/32/19/3047/2196507), [NCBI E-utilities](https://www.ncbi.nlm.nih.gov/books/NBK25501/), and [Bash](https://www.gnu.org/software/bash/). We hope curious users will consult the documentation of the tools and libraries used herein to aid in understanding.

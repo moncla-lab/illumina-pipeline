@@ -47,7 +47,7 @@ to receive feedback on where they are in the configuration process.
 Copy the file `config.yml.template` to `config.yml`. Make appropriate edits, which will likely involve adjusting only `reference` (what's used as the reference sequence) and the `data_root_directory` (where data was downloaded) for a first run.
 
 #### References
-We have [predefined references](./references.tsv), which is what `reference` in the configuration will refer to. The user can override these by defining their own with segments pulled from Genbank or using a custom reference. There is extended documentation on references for more detail.
+We have [predefined references](./references.tsv). The simplest use case is to choose a key from the reference column to poplate the config. The user can override these by defining their own with segments pulled from Genbank or using a custom reference. There is [extended documentation on references](./DOCUMENTATION.md#references) for more detail.
 
 #### Metadata
 
@@ -72,13 +72,13 @@ rf_Seq3
 
 while a completed metadata sheet will look like:
 
-| SequencingId     | SampleId     | Replicate |
-|--------------|--------------|--------------|
-| bv\_w1_Seq1 | bv_w1 | 1 |
-| bv\_w1_Seq2 | bv_w1 | 2 |
-| rf_Seq1 | rf | 1 |
-| rf_Seq2 | rf | 2 |
-| rf_Seq3 | rf | 1 |
+| SequencingId | SampleId | Replicate |
+| ------------ | -------- | --------- |
+| bv\_w1_Seq1  | bv_w1    | 1         |
+| bv\_w1_Seq2  | bv_w1    | 2         |
+| rf_Seq1      | rf       | 1         |
+| rf_Seq2      | rf       | 2         |
+| rf_Seq3      | rf       | 1         |
 
 For emphasis, the `check` step above will attempt to give feedback at any step of the configuration.
 
@@ -107,15 +107,15 @@ python mlip/visualization.py
 
 All paths below are assumed to be relative to the `data` directory. Anything enclosed in brackets are [Snakemake wildcards](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#snakefiles-wildcards) with further explanation in documentation. Relevant outputs include:
 
-| File description     | File path     |
-|--------------|--------------|
-| Consensus sequences for a given segment | `{segment}.fasta` |
-| Protein sequences for a given gene | `protein/{gene}.fasta` |
-| Annotated, merged variants | `variants.tsv` |
-| Project wide overview of coverage | `coverage-report.tsv` |
-| Zip of all small files | `project.zip` |
-| Plot of intrahost variants for a sample | `{sample}/ml.html` |
-| Replicate, mapping specific coverage | `{sample}/replicate-{replicate}/{mapping_stage}/coverage.tsv` |
+| File description                        | File path                                                     |
+| --------------------------------------- | ------------------------------------------------------------- |
+| Consensus sequences for a given segment | `{segment}.fasta`                                             |
+| Protein sequences for a given gene      | `protein/{gene}.fasta`                                        |
+| Annotated, merged variants              | `variants.tsv`                                                |
+| Project wide overview of coverage       | `coverage-report.tsv`                                         |
+| Zip of all small files                  | `project.zip`                                                 |
+| Plot of intrahost variants for a sample | `{sample}/ml.html`                                            |
+| Replicate, mapping specific coverage    | `{sample}/replicate-{replicate}/{mapping_stage}/coverage.tsv` |
 
 
 ## Conventions
