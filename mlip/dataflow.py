@@ -121,7 +121,9 @@ import pandas as pd
 import yaml
 
 
-def load_reference_dictionary(reference):
+def load_reference_dictionary(reference, using_zip):
+    if using_zip:
+        return {}
     reference_dictionary = {}
     with open("references.tsv", "r", newline="") as tsv_file:
         reader = csv.DictReader(tsv_file, delimiter="\t")
@@ -135,6 +137,20 @@ def load_manifest():
     with open("data/file_manifest.json") as manifest_file:
         manifest = json.load(manifest_file)
     return manifest
+
+
+def load_segments(config):
+    ref = config.get("reference", "")
+    if ref.endswith(".zip"):
+        # After unzip, expect one folder per segment under data/reference/
+        base = Path("data/reference")
+        return [
+            p.name for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")
+        ]
+    else:
+        # Treat as a named key—load the dictionary here
+        ref_dict = load_reference_dictionary(ref)
+        return list(ref_dict.keys())
 
 
 def extract_genes(input_gtf, output_gene_list):

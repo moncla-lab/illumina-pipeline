@@ -25,51 +25,47 @@ wildcard_constraints:
 configfile: "config.yml"
 
 REFERENCE = config['reference']
-reference_dictionary = load_reference_dictionary(REFERENCE)
+USING_ZIP = REFERENCE.endswith(".zip")
+reference_dictionary = load_reference_dictionary(REFERENCE, USING_ZIP)
 metadata_dictionary = load_metadata_dictionary()
 SAMPLES = samples_to_analyze()
 DUPLICATE_SAMPLES = get_duplicate_samples(metadata_dictionary)
-SEGMENTS = reference_dictionary.keys()
+SEGMENTS = load_segments(config)
 NUMBER_OF_REMAPPINGS = config['number_of_remappings']
 
-rule fetch_reference_data:
-    message:
-        'Fetching reference data for segment {wildcards.segment}...'
-    output:
-        fasta='data/reference/{segment}/sequence.fasta',
-        genbank='data/reference/{segment}/metadata.gb'
-    resources:
-        ncbi_fetches=1
-    params:
-        genbank_accession=(
-            lambda wildcards:
-            reference_dictionary[wildcards.segment]['genbank_accession']
-        ),
-    shell:
-        '''
-            efetch -db nuccore \
-                -id {params.genbank_accession} \
-                -format genbank \
-                > {output.genbank}
+if not USING_ZIP:
+    rule fetch_reference_data:
+        message:
+            'Fetching reference data for segment {wildcards.segment}...'
+        output:
+            fasta='data/reference/{segment}/sequence.fasta',
+            genbank='data/reference/{segment}/metadata.gb'
+        resources:
+            ncbi_fetches=1
+        params:
+            genbank_accession=(
+                lambda wildcards:
+                reference_dictionary[wildcards.segment]['genbank_accession']
+            ),
+        shell:
+            '''
+                efetch -db nuccore \
+                    -id {params.genbank_accession} \
+                    -format genbank \
+                    > {output.genbank}
 
-            efetch -db nuccore \
-                -id {params.genbank_accession} \
-                -format fasta \
-            | seqkit replace -p "^(.+)" -r "{wildcards.segment} genbank"\
-                > {output.fasta}
-        '''
-
-def get_reference_input(wildcards):
-    if config["reference"].endswith(".zip"):
-        return "data/reference/.unzipped"
-    else:
-        return expand("data/reference/{segment}/sequence.fasta", segment=SEGMENTS)
+                efetch -db nuccore \
+                    -id {params.genbank_accession} \
+                    -format fasta \
+                | seqkit replace -p "^(.+)" -r "{wildcards.segment} genbank"\
+                    > {output.fasta}
+            '''
 
 rule build_full_reference:
     message:
         'Concatenating reference data into single FASTA...'
     input:
-        get_reference_input
+        expand("data/reference/{segment}/sequence.fasta", segment=SEGMENTS)
     output:
         'data/reference/sequences.fasta',
     shell:
@@ -77,7 +73,7 @@ rule build_full_reference:
 
 
 def get_genbank_input(wildcards):
-    if config["reference"].endswith(".zip"):
+    if USING_ZIP:
         return f"data/reference/{wildcards.segment}/metadata.gb"
     else:
         return rules.fetch_reference_data.output.genbank
