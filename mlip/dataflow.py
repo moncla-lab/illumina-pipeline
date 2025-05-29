@@ -1103,7 +1103,7 @@ def merge_varscan(clean_varscan_dfs):
 
 def merge_varscan_io(input_tsv_filepaths, output_tsv_filepath):
     dfs = [
-        pd.read_csv(input_tsv_filepath, sep="\t")
+        pd.read_csv(input_tsv_filepath, sep="\t", na_filter=False)
         for input_tsv_filepath in input_tsv_filepaths
     ]
     merged_df = merge_varscan(dfs)
@@ -1592,7 +1592,7 @@ def merge_variant_calls(input, output):
     for fp in input:
         parts = fp.split("/")
         sample = parts[1]
-        df = pd.read_csv(fp, sep="\t")
+        df = pd.read_csv(fp, sep="\t", na_filter=False)
         df["sample"] = sample
         dfs.append(df)
 
