@@ -119,6 +119,7 @@ Alternatively, just explore the data directory from your desktop. All paths belo
 | Plot of intrahost variants for a sample | `{sample}/ml.html`                                            |
 | Replicate, mapping specific coverage    | `{sample}/replicate-{replicate}/{mapping_stage}/coverage.tsv` |
 
+We also have a [more comprehensive list of outputs](DOCUMENTATION.md#5-output-produced).
 
 ## Conventions
 
