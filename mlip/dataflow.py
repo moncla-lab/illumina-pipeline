@@ -1051,6 +1051,8 @@ def merge_varscan(clean_varscan_dfs):
     for idx, clean_varscan_df in enumerate(clean_varscan_dfs):
         replicate_key = "replicate_%d" % (idx + 1)
         for _, row in clean_varscan_df.iterrows():
+            if row["gene"] in ("PA-X", "PB1-F2"):
+                continue
             variant_key = (
                 row["segment"],
                 row["reference_position"],
@@ -1598,8 +1600,7 @@ def merge_variant_calls(input, output):
 
     # Concatenate all DataFrames and write to CSV
     merged = pd.concat(dfs, ignore_index=True)
-    not_frameshift_variant = (merged.gene != "PA-X") & (merged.gene != "PB1-F2")
-    merged.loc[not_frameshift_variant].to_csv(output, index=False, sep="\t")
+    merged.to_csv(output, index=False, sep="\t")
 
 
 unambig = set("ATCG")
