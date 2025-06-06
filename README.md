@@ -17,6 +17,8 @@ conda create -n mlip python=3.12 pandas=2 altair biopython bedtools bcftools bow
 
 Usage instructions assume that you've successfully followed the [installation instructions](#installation), and read about and adhere to the [conventions](#conventions) used by this software. Further, it assumes a basic understanding of command line interfaces, as well as [conda](https://docs.conda.io/en/latest/) and [Snakemake](https://snakemake.readthedocs.io/en/stable/).
 
+If it's your first run, we've already prepared data and encourage you to use our [Camboda BaseSpace example](./examples/cambodia-basespace).
+
 ### Quick start
 Suppose you have several FASTQs downloaded to a folder that you'd like to analyze for a project called `MyAnalysis`.
 
@@ -47,7 +49,7 @@ to receive feedback on where they are in the configuration process.
 Copy the file `config.yml.template` to `config.yml`. Make appropriate edits, which will likely involve adjusting only `reference` (what's used as the reference sequence) and the `data_root_directory` (where data was downloaded) for a first run.
 
 #### References
-We have [predefined references](./references.tsv). The simplest use case is to choose a key from the reference column to poplate the config. The user can override these by defining their own with segments pulled from Genbank or using a custom reference. There is [extended documentation on references](./DOCUMENTATION.md#references) for more detail.
+We have [predefined references](./references.tsv). The simplest use case is to choose a key from the reference column to populate the config. The user can override these by defining their own with segments pulled from Genbank or using a custom reference. There is [extended documentation on references](./DOCUMENTATION.md#references) for more detail.
 
 #### Metadata
 
@@ -88,7 +90,7 @@ Once the metadata spreadsheet is fully populated, the following command moves da
 python mlip/dataflow.py flow
 ```
 
-For data from SRA, run the above with the `--sra-mode` flag.
+Note that the default mode for the above command is to handle BaseSpace data, and there is an SRA mode that uses the `--sra-mode` flag.
 
 ### Run the pipeline
 
