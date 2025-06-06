@@ -121,7 +121,7 @@ import pandas as pd
 import yaml
 
 
-def load_reference_dictionary(reference, using_zip):
+def load_reference_dictionary(reference, using_zip=False):
     if using_zip:
         return {}
     reference_dictionary = {}
