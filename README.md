@@ -17,7 +17,7 @@ conda create -n mlip python=3.12 pandas=2 altair biopython bedtools bcftools bow
 
 Usage instructions assume that you've successfully followed the [installation instructions](#installation), and read about and adhere to the [conventions](#conventions) used by this software. Further, it assumes a basic understanding of command line interfaces, as well as [conda](https://docs.conda.io/en/latest/) and [Snakemake](https://snakemake.readthedocs.io/en/stable/).
 
-If it's your first run, we've already prepared data and encourage you to use our [Camboda BaseSpace example](./examples/cambodia-basespace).
+If it's your first run, we've already prepared data and encourage you to use our [Cambodia BaseSpace example](./examples/cambodia-basespace). We have also prepared other [examples](./examples).
 
 ### Quick start
 Suppose you have several FASTQs downloaded to a folder that you'd like to analyze for a project called `MyAnalysis`.
@@ -135,4 +135,4 @@ See the example metadata above. This helps automatically populate the sample ass
 
 There are analogous formats for SRA, and we expect users to put their data in one format or another to work with this pipeline.
 
-This gives an overall gist of the pipeline. For further explanation, please consult [our documentation](./DOCUMENTATION.md)
+This gives an overall gist of the pipeline. For further explanation, please consult [our documentation](./DOCUMENTATION.md).
