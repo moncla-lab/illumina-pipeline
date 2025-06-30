@@ -99,7 +99,7 @@ With data situated, the pipeline can be ran as:
 snakemake -j $NUMBER_OF_JOBS all
 ```
 
-After this, the `data` directory should be filled with lots of files of various formats, many which contain relevant virological information.
+$NUMBER_OF_JOBS should be at least 1, and no more than the number of cores on your computer. After this, the `data` directory should be filled with lots of files of various formats, many which contain relevant virological information.
 
 ### Outputs
 
