@@ -14,13 +14,13 @@ An example metadata spreadsheet that will run has also been provided for you. Ag
 Run
 
 ```
-python mlip/dataflow preprocess -f ~/path/to/cambodia-basespace/ids.txt
+python mlip/dataflow.py preprocess -f ~/path/to/cambodia-basespace/ids.txt
 ```
 
 to generate the metadata. Populated sample IDs and replicates in the metadata. Run
 
 ```
-python mlip/dataflow flow
+python mlip/dataflow.py flow
 ```
 
 to show the repository where the data lies. Run

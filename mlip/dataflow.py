@@ -88,12 +88,23 @@ def perform_initial_environment_check():
             "   Your environment does not appear to be correctly installed or activated."
         )
         print("\n   Please ensure you have followed the installation instructions:")
-        print("   and activated the Conda environment, e.g.:")
-        print("     `conda activate mlip`")
+        print("   and activated the Conda environment, e.g.:\n")
+        print("         conda activate mlip\n")
+        print("     Please also make sure that when you run the command:\n")
+        print("         which python\n")
+        print("     you see something like:\n")
+        print("         /path/to/anaconda/envs/mlip/python\n")
         print(
-            "\n   If the issue persists, you may need to reinstall the environment using"
+            "     to ensure that your shell is utilizing python from the MLIP environment."
         )
-        print("   the command from the README.")
+        print("\n   If the issue persists, you may need to:")
+        print("    1) reinstall the environment using the command from the README.")
+        print("    2) assess the way your shell is currently configured.\n")
+        print("Option 2 can be technically challenging. Know what shell you are")
+        print("using (e.g., zsh vs bash). Know what startup scripts run (e.g")
+        print(".zshrc), how they modify your environment, and why. It is possible")
+        print("that this error occurs due personal customizations of your")
+        print("environment that are difficult/impossible to account for in advance.")
         print("---------------------------------------------------------------")
         sys.exit(1)  # Exit the script
     else:
