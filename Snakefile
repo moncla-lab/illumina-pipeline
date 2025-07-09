@@ -344,6 +344,7 @@ rule call_variants:
     priority: 4
     shell:
         '''
+        (
             varscan mpileup2snp {input.pileup} \
                 --min-coverage {params.variants_minimum_coverage} \
                 --min-avg-qual {params.minimum_quality_score} \
@@ -353,6 +354,7 @@ rule call_variants:
             grep -v '^##' {output.vcf} > {output.tsv}
             bgzip -c {output.vcf} > {output.vcf_zip}
             tabix -p vcf {output.vcf_zip}
+        ) || true
         '''
 
 rule coverage:
