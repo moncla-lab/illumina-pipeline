@@ -1109,6 +1109,19 @@ def merge_varscan(clean_varscan_dfs):
         }
         variant_list.append(variant)
 
+    if not variant_list:
+        # If no variants were found, create an empty DataFrame with the expected columns.
+        num_reps = len(clean_varscan_dfs)
+        freq_cols = [f"Frequency_{i+1}" for i in range(num_reps)]
+        final_cols = [
+            "segment",
+            "position",
+            "allele",
+            "coding_region_change",
+            "gene"
+        ] + freq_cols
+        return pd.DataFrame(columns=final_cols)
+
     return pd.DataFrame(variant_list).sort_values(
         by=["segment", "position"], ascending=[True, True]
     )
