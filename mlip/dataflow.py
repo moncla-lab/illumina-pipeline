@@ -1118,7 +1118,7 @@ def merge_varscan(clean_varscan_dfs):
             "position",
             "allele",
             "coding_region_change",
-            "gene"
+            "gene",
         ] + freq_cols
         return pd.DataFrame(columns=final_cols)
 
@@ -1759,6 +1759,94 @@ def get_duplicate_samples(metadata_dictionary):
         sample for sample, metadata in metadata_dictionary.items() if len(metadata) == 2
     ]
     return duplicate_samples
+
+
+def compare_remappings_io(
+    penultimate_fasta_path, final_fasta_path, output_tsv_path, sample, replicate
+):
+    """
+    Compare consensus sequences between penultimate and final remapping stages.
+
+    Parameters:
+        penultimate_fasta_path: Path to the penultimate remapping consensus FASTA
+        final_fasta_path: Path to the final remapping consensus FASTA
+        output_tsv_path: Path to write the consensus summary report
+        sample: Sample ID for the comparison
+        replicate: Replicate number for the comparison
+    """
+    try:
+        penultimate_dict = SeqIO.to_dict(SeqIO.parse(penultimate_fasta_path, "fasta"))
+        final_dict = SeqIO.to_dict(SeqIO.parse(final_fasta_path, "fasta"))
+
+        differences = []
+
+        for segment_id in penultimate_dict:
+            if segment_id not in final_dict:
+                continue
+
+            penultimate_seq = str(penultimate_dict[segment_id].seq)
+            final_seq = str(final_dict[segment_id].seq)
+
+            if penultimate_seq == final_seq:
+                continue
+
+            min_length = min(len(penultimate_seq), len(final_seq))
+            for pos in range(min_length):
+                if penultimate_seq[pos] != final_seq[pos]:
+                    differences.append(
+                        {
+                            "sample": sample,
+                            "replicate": replicate,
+                            "segment": segment_id,
+                            "position": pos + 1,  # 1-based positioning
+                            "penultimate_base": penultimate_seq[pos],
+                            "final_base": final_seq[pos],
+                        }
+                    )
+
+        if differences:
+            df = pd.DataFrame(differences)
+            df.to_csv(output_tsv_path, sep="\t", index=False)
+        else:
+            # Create empty file with header if no differences found
+            df = pd.DataFrame(columns=['sample', 'replicate', 'segment', 'position', 'penultimate_base', 'final_base'])
+            df.to_csv(output_tsv_path, sep="\t", index=False)
+
+    except Exception as e:
+        print(f"Error comparing remappings for {sample} replicate {replicate}: {e}")
+        Path(output_tsv_path).touch()
+
+
+def aggregate_consensus_summaries_io(input_files, output_file):
+    """
+    Aggregate consensus summary TSV files, handling empty files gracefully.
+    
+    Parameters:
+        input_files: List of input TSV file paths
+        output_file: Path to write aggregated output
+    """
+    # Expected columns for empty case
+    columns = ['sample', 'replicate', 'segment', 'position', 'penultimate_base', 'final_base']
+    
+    # Read all non-empty files
+    dfs = []
+    for file_path in input_files:
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            try:
+                df = pd.read_csv(file_path, sep='\t')
+                if not df.empty:
+                    dfs.append(df)
+            except pd.errors.EmptyDataError:
+                continue
+    
+    # Combine or create empty DataFrame
+    if dfs:
+        combined_df = pd.concat(dfs, ignore_index=True)
+    else:
+        combined_df = pd.DataFrame(columns=columns)
+    
+    # Write output
+    combined_df.to_csv(output_file, sep='\t', index=False)
 
 
 if __name__ == "__main__":

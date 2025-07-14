@@ -140,6 +140,24 @@ def reverse_fastq_merge_inputs(wildcards):
     )
 
 
+# Helper function to determine input files for the consensus summary comparison
+def get_consensus_summary_inputs(wildcards):
+    final_remapping_num = NUMBER_OF_REMAPPINGS
+    
+    if final_remapping_num < 1:
+        return []
+
+    final_path = f"data/{wildcards.sample}/replicate-{wildcards.replicate}/remapping-{final_remapping_num}/consensus.fasta"
+
+    if final_remapping_num == 1:
+        penultimate_path = f"data/{wildcards.sample}/replicate-{wildcards.replicate}/initial/consensus.fasta"
+    else:
+        penultimate_num = final_remapping_num - 1
+        penultimate_path = f"data/{wildcards.sample}/replicate-{wildcards.replicate}/remapping-{penultimate_num}/consensus.fasta"
+        
+    return [penultimate_path, final_path]
+
+
 rule concatenate_replicates_from_manifest:
     input:
         manifest="data/file_manifest.json"
@@ -618,6 +636,49 @@ rule full_genome:
 #    shell:
 #        'csvstack {input} > {output}'
 
+rule check_consensus_summary:
+    message:
+        "Comparing penultimate vs. final remapping for {wildcards.sample}, replicate {wildcards.replicate}..."
+    input:
+        get_consensus_summary_inputs
+    output:
+        "data/{sample}/replicate-{replicate}/consensus_summary.tsv"
+    run:
+        penultimate_fasta, final_fasta = input
+        compare_remappings_io(
+            penultimate_fasta,
+            final_fasta,
+            output[0],
+            wildcards.sample,
+            wildcards.replicate
+        )
+
+def get_sample_consensus_summary_inputs(wildcards):
+    return expand(
+        "data/{{sample}}/replicate-{replicate}/consensus_summary.tsv",
+        replicate=metadata_dictionary[wildcards.sample].keys()
+    )
+
+rule aggregate_sample_consensus_summary:
+    message:
+        "Aggregating consensus summary reports for sample {wildcards.sample}..."
+    input:
+        get_sample_consensus_summary_inputs
+    output:
+        "data/{sample}/consensus_summary_report.tsv"
+    run:
+        aggregate_consensus_summaries_io(input, output[0])
+
+rule aggregate_all_consensus_summary:
+    message:
+        "Aggregating all sample consensus summary reports into a final project summary..."
+    input:
+        expand("data/{sample}/consensus_summary_report.tsv", sample=SAMPLES)
+    output:
+        "data/consensus_summary_report.tsv"
+    run:
+        aggregate_consensus_summaries_io(input, output[0])
+
 rule all_variants:
     input:
         tsv=expand('data/{sample}/ml.tsv', sample=DUPLICATE_SAMPLES),
@@ -684,4 +745,5 @@ rule all:
         rules.all_consensus.input,
         rules.all_protein.output,
         rules.all_variants.output,
-        rules.zip.output
+        rules.zip.output,
+        rules.aggregate_all_consensus_summary.output
