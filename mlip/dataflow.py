@@ -129,6 +129,7 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 import pandas as pd
+import numpy as np
 import yaml
 
 
@@ -1169,38 +1170,71 @@ def assign_coverage_bucket(coverage):
 def compute_coverage_categories(df):
     config = load_mlip_config()
     coverage_bucket_labels = get_coverage_bucket_labels(config)
-    # Calculate the number of sites in each range
-    df["num_sites"] = df["end"] - df["start"]
 
-    # Assign each coverage value to a bucket
-    df["coverage_bucket"] = df["coverage"].apply(assign_coverage_bucket)
+    df["length"] = df["end"] - df["start"]
 
-    # Group by segment and coverage bucket and sum the number of sites
-    bucket_summary = (
-        df.groupby(["segment", "coverage_bucket"])["num_sites"]
-        .sum()
-        .reset_index(name="count")
-    )
+    def calculate_stats(group):
+        total_length = group["length"].sum()
+        if total_length == 0:
+            return pd.Series({"mean_coverage": 0, "median_coverage": 0})
 
-    # Create all possible combinations of segments and coverage buckets
+        weighted_sum = (group["coverage"] * group["length"]).sum()
+        mean_cov = weighted_sum / total_length
+
+        # Efficiently calculate median by repeating coverage value by its region length
+        expanded_coverage = np.repeat(group["coverage"], group["length"])
+        median_cov = np.median(expanded_coverage)
+
+        return pd.Series({"mean_coverage": mean_cov, "median_coverage": median_cov})
+
+    if not df.empty:
+        stats_df = df.groupby("segment").apply(calculate_stats).reset_index()
+    else:
+        stats_df = pd.DataFrame(columns=["segment", "mean_coverage", "median_coverage"])
+
+    if not df.empty:
+        df["coverage_bucket"] = df["coverage"].apply(assign_coverage_bucket)
+        bucket_summary = (
+            df.groupby(["segment", "coverage_bucket"])["length"]
+            .sum()
+            .reset_index(name="count")
+        )
+    else:
+        bucket_summary = pd.DataFrame(columns=["segment", "coverage_bucket", "count"])
+
     all_buckets = pd.DataFrame({"coverage_bucket": coverage_bucket_labels})
-    segments = df["segment"].unique()
-    all_combinations = pd.MultiIndex.from_product(
-        [segments, all_buckets["coverage_bucket"]], names=["segment", "coverage_bucket"]
-    ).to_frame(index=False)
+    segments = df["segment"].unique() if not df.empty else []
 
-    # Merge the combinations with the actual bucket summary and fill missing values with 0
-    bucket_summary = pd.merge(
-        all_combinations, bucket_summary, on=["segment", "coverage_bucket"], how="left"
+    if len(segments) > 0:
+        all_combinations = pd.MultiIndex.from_product(
+            [segments, all_buckets["coverage_bucket"]],
+            names=["segment", "coverage_bucket"],
+        ).to_frame(index=False)
+        bucket_summary = pd.merge(
+            all_combinations,
+            bucket_summary,
+            on=["segment", "coverage_bucket"],
+            how="left",
+        ).fillna(0)
+        desired_structure = bucket_summary.pivot_table(
+            index="segment", columns="coverage_bucket", values="count", fill_value=0
+        ).reset_index()[["segment"] + coverage_bucket_labels]
+        desired_structure.columns.name = None
+    else:
+        desired_structure = pd.DataFrame(columns=["segment"] + coverage_bucket_labels)
+
+    final_summary_df = pd.merge(
+        desired_structure, stats_df, on="segment", how="outer"
     ).fillna(0)
 
-    # Pivot to the desired format
-    desired_structure = bucket_summary.pivot_table(
-        index="segment", columns="coverage_bucket", values="count", fill_value=0
-    ).reset_index()[["segment"] + coverage_bucket_labels]
+    final_cols = [
+        "segment",
+        "mean_coverage",
+        "median_coverage",
+    ] + coverage_bucket_labels
+    final_summary_df = final_summary_df.reindex(columns=final_cols, fill_value=0)
 
-    desired_structure.columns.name = None
-    return desired_structure
+    return final_summary_df
 
 
 def compute_coverage_categories_io(input_coverage, output_summary):
@@ -1809,7 +1843,16 @@ def compare_remappings_io(
             df.to_csv(output_tsv_path, sep="\t", index=False)
         else:
             # Create empty file with header if no differences found
-            df = pd.DataFrame(columns=['sample', 'replicate', 'segment', 'position', 'penultimate_base', 'final_base'])
+            df = pd.DataFrame(
+                columns=[
+                    "sample",
+                    "replicate",
+                    "segment",
+                    "position",
+                    "penultimate_base",
+                    "final_base",
+                ]
+            )
             df.to_csv(output_tsv_path, sep="\t", index=False)
 
     except Exception as e:
@@ -1820,33 +1863,40 @@ def compare_remappings_io(
 def aggregate_consensus_summaries_io(input_files, output_file):
     """
     Aggregate consensus summary TSV files, handling empty files gracefully.
-    
+
     Parameters:
         input_files: List of input TSV file paths
         output_file: Path to write aggregated output
     """
     # Expected columns for empty case
-    columns = ['sample', 'replicate', 'segment', 'position', 'penultimate_base', 'final_base']
-    
+    columns = [
+        "sample",
+        "replicate",
+        "segment",
+        "position",
+        "penultimate_base",
+        "final_base",
+    ]
+
     # Read all non-empty files
     dfs = []
     for file_path in input_files:
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             try:
-                df = pd.read_csv(file_path, sep='\t')
+                df = pd.read_csv(file_path, sep="\t")
                 if not df.empty:
                     dfs.append(df)
             except pd.errors.EmptyDataError:
                 continue
-    
+
     # Combine or create empty DataFrame
     if dfs:
         combined_df = pd.concat(dfs, ignore_index=True)
     else:
         combined_df = pd.DataFrame(columns=columns)
-    
+
     # Write output
-    combined_df.to_csv(output_file, sep='\t', index=False)
+    combined_df.to_csv(output_file, sep="\t", index=False)
 
 
 if __name__ == "__main__":
