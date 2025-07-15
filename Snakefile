@@ -737,7 +737,7 @@ rule zip:
     output:
         'data/project.zip'
     shell:
-        'zip {output} $(find data -type f | grep -v -e fastq -e bam -e sam -e pileup)'
+        'zip -r {output} data -x "*.fastq" "*.bam" "*.sam" "*.pileup"'
 
 rule all:
     input:
