@@ -101,6 +101,8 @@ snakemake -j $NUMBER_OF_JOBS all
 
 $NUMBER_OF_JOBS should be at least 1, and no more than the number of cores on your computer. After this, the `data` directory should be filled with lots of files of various formats, many which contain relevant virological information.
 
+**Important**: Always review the consensus remapping differences report (`consensus_summary_report.tsv`) after running the pipeline to identify positions where consensus sequences changed between remapping iterations, which indicates potential mapping inconsistencies that should be investigated. When this occurs, consult the [additional documentation](DOCUMENTATION.md#check_consensus_summary).
+
 ### Outputs
 
 To bring up a directory tree of the `data` directory where you will find files of interest and be able to view certain plots, run:
@@ -117,6 +119,7 @@ Alternatively, just explore the data directory from your desktop. All paths belo
 | Protein sequences for a given gene      | `protein/{gene}.fasta`                                        |
 | Annotated, merged variants              | `variants.tsv`                                                |
 | Project wide overview of coverage       | `coverage-report.tsv`                                         |
+| Consensus remapping differences report  | `consensus_summary_report.tsv`                                |
 | Zip of all small files                  | `project.zip`                                                 |
 | Plot of intrahost variants for a sample | `{sample}/ml.html`                                            |
 | Replicate, mapping specific coverage    | `{sample}/replicate-{replicate}/{mapping_stage}/coverage.tsv` |

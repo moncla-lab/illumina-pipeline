@@ -518,6 +518,27 @@ Translates CDS regions from the sample consensus genome into protein sequences.
 
 Generates annotated protein sequences for downstream functional analysis or quality checks.
 
+### `check_consensus_summary`
+
+Compares consensus sequences between the penultimate and final remapping iterations to identify positions where the consensus changed.
+
+The iterative remapping process can sometimes produce confusing results at bases where the consensus sequence differs between successive remapping rounds. This occurs when reads that are dropped in previous iterations now have a better reference to map to and show up in successive ones. It can results in ambiguous bases being called as well as bases flipping when more intrahost variation is properly mapped. Such inconsistencies can indicate regions of the genome where the reference used for remapping may not be optimal.
+
+- **Input**:
+  - Two consensus FASTA files: one from the penultimate remapping round and one from the final remapping round.
+
+- **Output**:
+  - `consensus_summary.tsv`: Per-replicate report listing all positions where consensus sequences differ between remapping iterations.
+
+- **Function**: `compare_remappings_io(...)`
+  - Compares consensus sequences position by position between the two remapping stages.
+  - Reports the sample, replicate, segment, position (1-based), and the differing bases.
+  - Creates an empty file with headers if no differences are found.
+
+- **Aggregation**: Individual replicate reports are aggregated at the sample level (`aggregate_sample_consensus_summary`) and then across all samples (`aggregate_all_consensus_summary`) to produce the final project-wide `consensus_summary_report.tsv`.
+
+This step helps identify potentially problematic regions where the consensus is not reliable, which may require manual review or identification of a suitable reference.
+
 ### `annotate_varscan`
 
 Annotates SNPs called by VarScan with amino acid consequences using coding region context.
@@ -629,6 +650,7 @@ The `data/` directory contains all processed outputs from the viral deep sequenc
 #### Project-Level Summaries
 - `coverage-report.tsv` — Coverage summary across all final replicates.
 - `consensus-report.tsv` — Summary of base-level agreement in consensus sequences.
+- `consensus_summary_report.tsv` — Report identifying positions where consensus sequences differ between remapping iterations.
 - `variants.tsv` — Merged variant calls across samples.
 - `project.zip` — Compressed archive of final results (excluding raw/large files).
 - `protein/` — Contains per-gene protein FASTAs aggregated across all samples.
