@@ -1422,6 +1422,7 @@ def annotate_amino_acid_changes(coding_regions, transcripts, vcf, outfilename):
                     frequency = "none reported"
 
                 # figure out whether the SNP lies within a coding region:
+                in_coding_region = False
                 for gene in coding_regions[sequence_name]:
                     coordinates = coding_regions[sequence_name][gene]
 
@@ -1430,6 +1431,7 @@ def annotate_amino_acid_changes(coding_regions, transcripts, vcf, outfilename):
                         if (
                             site >= coordinates[i] and site <= coordinates[i + 1]
                         ):  # if site is within the gene
+                            in_coding_region = True
 
                             # determine the coding region site, depending on if there are 2 frames or 1
                             if len(coordinates) == 2:
@@ -1493,6 +1495,22 @@ def annotate_amino_acid_changes(coding_regions, transcripts, vcf, outfilename):
                                 ]
                                 output2 = "\t".join(output)
                                 outfile.write(output2)
+                if not in_coding_region:
+                    with open(outfilename, "a") as outfile:
+                        output = [
+                            sequence_name,
+                            "NA",
+                            str(site + 1),
+                            reference_allele.upper(),
+                            alternative_allele.upper(),
+                            "NA",
+                            "intergenic",
+                            frequency,
+                            frequency_decimal,
+                            "\n",
+                        ]
+                        output2 = "\t".join(output)
+                        outfile.write(output2)
 
 
 def coverage_summary(input_tsvs, output_tsv):
