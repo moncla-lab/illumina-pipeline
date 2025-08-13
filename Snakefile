@@ -114,12 +114,12 @@ rule sample_list:
 
 rule coding_regions:
     input:
-        gtf=rules.full_gtf.output[0],
-        references=expand('data/reference/{segment}/sequence.fasta', segment=SEGMENTS)
+        references=expand('data/reference/{segment}/metadata.gb', segment=SEGMENTS)
     output:
         'data/reference/coding_regions.json'
     run:
-        extract_coding_regions(input.gtf, input.references, output[0])
+        extract_coding_regions_io(SEGMENTS, output[0])
+
 
 def forward_fastq_merge_inputs(wildcards):
     experiments = metadata_dictionary[wildcards.sample][wildcards.replicate]
@@ -521,16 +521,14 @@ rule call_sample_proteins:
 rule annotate_varscan:
     input:
         coding_regions=rules.coding_regions.output[0],
-        reference=rules.build_full_reference.output[0],
         varscan=rules.call_variants.output.vcf
     output:
         'data/{sample}/replicate-{replicate}/{mapping_stage}/varscan-annotated.tsv'
     run:
         with open(input.coding_regions) as json_file:
             coding_regions = json.load(json_file)
-        transcripts = slice_fastas(coding_regions, input.reference)
         annotate_amino_acid_changes(
-            coding_regions, transcripts, input.varscan, output[0]
+            coding_regions, input.varscan, output[0]
         )
 
 rule clean_varscan:
