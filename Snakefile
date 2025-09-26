@@ -737,6 +737,30 @@ rule zip:
     shell:
         'zip -r {output} data -x "*.fastq" "*.bam" "*.sam" "*.pileup"'
 
+def preserved_bam_input(wildcards):
+    bam_filepaths = []
+    for sample, replicates in metadata_dictionary.items():
+        for replicate in replicates.keys():
+            bam_filepaths.append(
+                f'data/{sample}/replicate-{replicate}/final.bam'
+            )
+    return bam_filepaths
+
+rule preserve_final_bam:
+    message:
+        'Preserving final BAM files for replicate {wildcards.replicate} of sample {wildcards.sample}...'
+    input:
+        bam='data/{sample}/replicate-{replicate}/remapping-%d/sorted.bam' % NUMBER_OF_REMAPPINGS,
+        bai='data/{sample}/replicate-{replicate}/remapping-%d/sorted.bam.bai' % NUMBER_OF_REMAPPINGS
+    output:
+        bam='data/{sample}/replicate-{replicate}/final.bam',
+        bai='data/{sample}/replicate-{replicate}/final.bam.bai'
+    shell:
+        '''
+        cp {input.bam} {output.bam}
+        cp {input.bai} {output.bai}
+        '''
+
 rule all:
     input:
         rules.all_preliminary.input,
@@ -744,4 +768,5 @@ rule all:
         rules.all_protein.output,
         rules.all_variants.output,
         rules.zip.output,
-        rules.aggregate_all_consensus_summary.output
+        rules.aggregate_all_consensus_summary.output,
+        preserved_bam_input

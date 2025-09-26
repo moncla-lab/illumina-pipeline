@@ -123,6 +123,7 @@ Alternatively, just explore the data directory from your desktop. All paths belo
 | Zip of all small files                  | `project.zip`                                                 |
 | Plot of intrahost variants for a sample | `{sample}/ml.html`                                            |
 | Replicate, mapping specific coverage    | `{sample}/replicate-{replicate}/{mapping_stage}/coverage.tsv` |
+| Final BAM files (preserved from last remapping) | `{sample}/replicate-{replicate}/final.bam`               |
 
 We also have a [more comprehensive list of outputs](DOCUMENTATION.md#5-output-produced).
 
