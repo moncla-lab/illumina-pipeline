@@ -112,15 +112,6 @@ rule sample_list:
     shell:
         'csvcut -t -c SampleId {input} | sort | uniq | grep -v SampleId > {output}'
 
-rule coding_regions:
-    input:
-        references=expand('data/reference/{segment}/metadata.gb', segment=SEGMENTS)
-    output:
-        'data/reference/coding_regions.json'
-    run:
-        extract_coding_regions_io(SEGMENTS, output[0])
-
-
 def forward_fastq_merge_inputs(wildcards):
     experiments = metadata_dictionary[wildcards.sample][wildcards.replicate]
     forward_path = 'data/%s/sequencing-{sequencing}/forward.fastq.gz' % wildcards.sample
@@ -517,6 +508,15 @@ rule call_sample_proteins:
 #        'data/{sample}/replicate-{replicate}/{mapping_stage}'
 #    shell:
 #        'multiqc -f {params} --outdir {params}'
+
+rule coding_regions:
+    input:
+        annotated_references=expand('data/reference/{segment}/metadata.gb', segment=SEGMENTS),
+        replicate_consensus=rules.full_consensus.output[0]
+    output:
+        'data/{sample}/replicate-{replicate}/{mapping_stage}/coding_regions.json'
+    run:
+        extract_coding_regions_io(SEGMENTS, input.replicate_consensus, output[0])
 
 rule annotate_varscan:
     input:

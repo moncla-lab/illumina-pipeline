@@ -1244,44 +1244,31 @@ def compute_coverage_categories_io(input_coverage, output_summary):
     coverage_summary_df.to_csv(output_summary, sep="\t", index=False)
 
 
-def extract_cds_with_coords(genbank_file):
+def extract_cds_with_coords(genbank_file, consensus_record):
+    """
+    Extracts CDS data using coordinates from a GenBank file but sequence
+    from a given consensus sequence record.
+    """
     cds_data = []
-    record = SeqIO.read(genbank_file, "genbank")
+    gb_record = SeqIO.read(genbank_file, "genbank")
 
-    for feature in record.features:
+    for feature in gb_record.features:
         if feature.type != "CDS":
             continue
 
-        seq_parts = []
+        coding_seq = str(feature.location.extract(consensus_record.seq))
+
+        # Rebuild the coordinate list as before
         coord_parts = []
-
-        # Handle joined locations vs single intervals
-        if isinstance(feature.location, CompoundLocation):
-            parts = feature.location.parts
-        else:
-            parts = [feature.location]
-
+        parts = feature.location.parts if isinstance(feature.location, CompoundLocation) else [feature.location]
         for part in parts:
-            start = int(part.start)
-            end = int(part.end)
-            strand = part.strand
-
-            if strand == 1:
-                seq_parts.append(str(record.seq[start:end]))
+            start, end = int(part.start), int(part.end)
+            if part.strand == 1:
                 coord_parts.extend(range(start, end))
             else:
-                seq_parts.append(str(record.seq[start:end].reverse_complement()))
                 coord_parts.extend(reversed(range(start, end)))
 
-        coding_seq = "".join(seq_parts)
-        assert len(coding_seq) == len(coord_parts)
-
-        gene_name = (
-            feature.qualifiers.get("gene", [record.id])[0]
-            if "gene" in feature.qualifiers
-            else record.id
-        )
-
+        gene_name = feature.qualifiers.get("gene", [gb_record.id])[0]
         cds_data.append(
             {"gene": gene_name, "coding": coding_seq, "positions": coord_parts}
         )
@@ -1289,17 +1276,31 @@ def extract_cds_with_coords(genbank_file):
     return cds_data
 
 
-def extract_coding_regions(segments):
+def extract_coding_regions(segments, replicate_consensus_fasta):
+    """
+    Loads consensus sequences and orchestrates CDS extraction for each segment.
+    """
+    # Load all consensus sequences into a dictionary for quick access
+    consensus_sequences = SeqIO.to_dict(SeqIO.parse(replicate_consensus_fasta, "fasta"))
+
     coding_regions = {}
     for segment in segments:
-        genbank_filepath = "data/reference/%s/metadata.gb" % segment
-        coding_regions[segment] = extract_cds_with_coords(genbank_filepath)
+        # Proceed only if the segment exists in the consensus file
+        if segment in consensus_sequences:
+            genbank_filepath = f"data/reference/{segment}/metadata.gb"
+            # Pass the specific consensus sequence record to the extraction function
+            consensus_record = consensus_sequences[segment]
+            coding_regions[segment] = extract_cds_with_coords(genbank_filepath, consensus_record)
+
     return coding_regions
 
 
-def extract_coding_regions_io(segments, output_json):
+def extract_coding_regions_io(segments, replicate_consensus_fasta, output_json):
+    """
+    I/O wrapper for extracting coding regions for a replicate.
+    """
     with open(output_json, "w") as json_file:
-        coding_regions = extract_coding_regions(segments)
+        coding_regions = extract_coding_regions(segments, replicate_consensus_fasta)
         json.dump(coding_regions, json_file)
 
 
@@ -1440,8 +1441,13 @@ def annotate_amino_acid_changes(coding_regions, vcf, outfilename):
         "segment",
         "gene",
         "reference_position",
+        "amino_acid_position",
         "reference_allele",
         "variant_allele",
+        "reference_codon",
+        "variant_codon",
+        "reference_amino_acid",
+        "variant_amino_acid",
         "coding_region_change",
         "synonymous/nonsynonymous",
         "frequency(%)",
@@ -1514,8 +1520,13 @@ def annotate_amino_acid_changes(coding_regions, vcf, outfilename):
                 segment,
                 gene_name,
                 str(site + 1),
+                str(aa_site),
                 reference_allele.upper(),
                 alternative_allele.upper(),
+                ref_codon.upper(),
+                variant_codon.upper(),
+                str(ref_aa),
+                str(variant_aa),
                 amino_acid_change,
                 syn_nonsyn,
                 frequency,
