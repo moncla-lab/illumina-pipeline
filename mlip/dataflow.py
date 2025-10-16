@@ -146,17 +146,17 @@ def load_reference_dictionary(reference, using_zip=False):
     return reference_dictionary
 
 
-def load_manifest():
-    with open("data/file_manifest.json") as manifest_file:
+def load_manifest(analysis_dir):
+    with open(f"{analysis_dir}/file_manifest.json") as manifest_file:
         manifest = json.load(manifest_file)
     return manifest
 
 
-def load_segments(config):
+def load_segments(config, analysis_dir):
     ref = config.get("reference", "")
     if ref.endswith(".zip"):
-        # After unzip, expect one folder per segment under data/reference/
-        base = Path("data/reference")
+        # After unzip, expect one folder per segment under analysis_dir/reference/
+        base = Path(analysis_dir) / "reference"
         return [
             p.name for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")
         ]
@@ -197,13 +197,21 @@ def preprocess(id_filepath, seq_key="Seq"):
         lines = f.read().splitlines()
     check_duplicates(lines)
 
+    # Load config to get analysis directory
+    config = load_mlip_config()
+    analysis_dir = config.get('analysis', '')
+    if not analysis_dir:
+        print("ERROR: 'analysis' key not found in config.yml.")
+        print("Please add an analysis name to your config.yml.")
+        sys.exit(1)
+
     sorted_seq_ids = sorted(lines, key=lambda x: x.lower())
     seq_key_pattern = re.compile(rf"_{seq_key}(\d+)", re.IGNORECASE)
     key_hash = {}
 
     fieldnames = ["SequencingId", "SampleId", "Replicate"]
-    os.makedirs("data", exist_ok=True)
-    f = open("data/metadata.tsv", "w", newline="")
+    os.makedirs(analysis_dir, exist_ok=True)
+    f = open(f"{analysis_dir}/metadata.tsv", "w", newline="")
     writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
     writer.writeheader()
     # process keys
@@ -220,7 +228,7 @@ def preprocess(id_filepath, seq_key="Seq"):
         )
 
     f.close()
-    print("Metadata spreadsheet written to data/metadata.tsv.")
+    print(f"Metadata spreadsheet written to {analysis_dir}/metadata.tsv.")
     print("Please edit, then run the flow step.")
     return
 
@@ -265,7 +273,12 @@ def flow(args):
     manifest_samples_data = defaultdict(lambda: defaultdict(list))
     config = load_mlip_config()
 
-    with open("data/metadata.tsv", "r") as f:
+    analysis_dir = config.get('analysis', '')
+    if not analysis_dir:
+        print("ERROR: 'analysis' key not found in config.yml.")
+        sys.exit(1)
+
+    with open(f"{analysis_dir}/metadata.tsv", "r") as f:
         reader = csv.DictReader(f, delimiter="\t")
         rows = list(reader)
 
@@ -346,14 +359,14 @@ def flow(args):
     if not final_samples_data:  # Check if any samples had processable experiments
         sys.stderr.write(
             "\nERROR: No FASTQ files were found or matched for any samples.\n"
-            f"       Please check 'data/metadata.tsv', 'data_root_directory' in 'config.yml' ({data_root}),\n"
+            f"       Please check '{analysis_dir}/metadata.tsv', 'data_root_directory' in 'config.yml' ({data_root}),\n"
             f"       and ensure files follow the BaseSpace convention.\n\n"
             f"       Also, you are in default mode... did you mean to run in SRA mode?"
         )
         sys.exit(1)
 
-    os.makedirs("data", exist_ok=True)
-    with open("data/file_manifest.json", "w") as f_out:
+    os.makedirs(analysis_dir, exist_ok=True)
+    with open(f"{analysis_dir}/file_manifest.json", "w") as f_out:
         json.dump(final_manifest, f_out, indent=2)
 
 
@@ -385,9 +398,15 @@ def fastq_is_low_coverage_sra_generic(filepath_str, min_reads=50):
 def sra_flow(args):
     manifest_samples_data = defaultdict(lambda: defaultdict(list))
     config = load_mlip_config()
+
+    analysis_dir = config.get('analysis', '')
+    if not analysis_dir:
+        print("ERROR: 'analysis' key not found in config.yml.")
+        sys.exit(1)
+
     data_root = Path(config["data_root_directory"]).expanduser()
 
-    with open("data/metadata.tsv", "r") as f:
+    with open(f"{analysis_dir}/metadata.tsv", "r") as f:
         reader = csv.DictReader(f, delimiter="\t")
         rows = list(reader)
 
@@ -450,13 +469,13 @@ def sra_flow(args):
     if not final_samples_data:  # Check if any samples had processable experiments
         sys.stderr.write(
             "\nERROR: No FASTQ files were found or matched for any samples.\n"
-            f"       Please check 'data/metadata.tsv', 'data_root_directory' in 'config.yml' ({data_root}),\n"
+            f"       Please check '{analysis_dir}/metadata.tsv', 'data_root_directory' in 'config.yml' ({data_root}),\n"
             f"       and ensure files follow the '{Path('{SequencingId}')}_1.fastq[.gz]' convention.\n\n"
         )
         sys.exit(1)
 
-    os.makedirs("data", exist_ok=True)
-    with open("data/file_manifest.json", "w") as f_out:
+    os.makedirs(analysis_dir, exist_ok=True)
+    with open(f"{analysis_dir}/file_manifest.json", "w") as f_out:
         json.dump(final_manifest, f_out, indent=2)
 
     total_experiments_in_manifest = sum(
@@ -465,13 +484,13 @@ def sra_flow(args):
         for experiments in reps.values()
     )
     print(
-        f"SRA/Generic mode: File manifest generated at data/file_manifest.json with {total_experiments_in_manifest} total experiments for {len(final_samples_data)} samples."
+        f"SRA/Generic mode: File manifest generated at {analysis_dir}/file_manifest.json with {total_experiments_in_manifest} total experiments for {len(final_samples_data)} samples."
     )
 
 
-def _prepare_reference_from_zip_if_needed(config):
+def _prepare_reference_from_zip_if_needed(config, analysis_dir):
     ref = Path(config.get("reference", "")).expanduser()
-    marker = Path("data/reference/.unzipped")
+    marker = Path(analysis_dir) / "reference" / ".unzipped"
 
     if not ref.suffix == ".zip":
         print("Reference will be downloaded from Genbank")
@@ -479,14 +498,19 @@ def _prepare_reference_from_zip_if_needed(config):
     if not ref.is_file():
         sys.exit(f"ERROR: Reference ZIP not found: {ref}")
 
-    shutil.rmtree("data/reference", ignore_errors=True)
-    subprocess.run(["unzip", "-o", str(ref), "-d", "."], check=True)
+    ref_dir = Path(analysis_dir) / "reference"
+    shutil.rmtree(ref_dir, ignore_errors=True)
+    subprocess.run(["unzip", "-o", str(ref), "-d", analysis_dir], check=True)
     marker.touch()
 
 
 def flow_cli(args):
     config = load_mlip_config()
-    _prepare_reference_from_zip_if_needed(config)
+    analysis_dir = config.get('analysis', '')
+    if not analysis_dir:
+        print("ERROR: 'analysis' key not found in config.yml.")
+        sys.exit(1)
+    _prepare_reference_from_zip_if_needed(config, analysis_dir)
     if args.sra_mode:
         print("Initiating SRA/Generic mode manifest generation...")
         sra_flow(args)
@@ -758,6 +782,7 @@ def report_pipeline_status():
     """
     overall_status_ok = True
     config = None
+    analysis_dir = None
 
     # --- 1. Configuration File (`config.yml`) ---
     print_section_header("1. Configuration (`config.yml`)")
@@ -766,6 +791,7 @@ def report_pipeline_status():
         print_status_item("`config.yml` found and loaded successfully.", "success")
 
         essential_keys = [
+            "analysis",
             "reference",
             "data_root_directory",
             "consensus_minimum_coverage",
@@ -780,6 +806,12 @@ def report_pipeline_status():
             overall_status_ok = False
         else:
             print_status_item("Essential configuration keys are present.", "success")
+
+        # Get analysis directory
+        analysis_dir = config.get('analysis', '')
+        if not analysis_dir:
+            print_status_item("`analysis` key not specified in `config.yml`.", "error")
+            overall_status_ok = False
 
         data_root_val = config.get("data_root_directory")
         if not data_root_val:
@@ -821,9 +853,9 @@ def report_pipeline_status():
 
     # --- 2. Reference Genome Setup ---
     print_section_header("2. Reference Genome Setup")
-    if config and "reference" in config:
+    if config and "reference" in config and analysis_dir:
         reference_config_val = str(config["reference"])
-        data_ref_path = Path("data/reference")
+        data_ref_path = Path(analysis_dir) / "reference"
         unzipped_marker_path = (
             data_ref_path / ".unzipped"
         )  # Matches marker from flow step
@@ -906,100 +938,104 @@ def report_pipeline_status():
         print_status_item("`reference` key missing in `config.yml`.", "error")
         overall_status_ok = False
 
-    # --- 3. Metadata File (`data/metadata.tsv`) ---
-    print_section_header("3. Metadata File (`data/metadata.tsv`)")
-    metadata_path = Path("data/metadata.tsv")
-    if not metadata_path.exists():
-        print_status_item("`data/metadata.tsv` not found.", "error")
-        print_guidance(
-            "This file is generated by: `python mlip/dataflow.py preprocess -f <your_id_list.txt>`."
-        )
-        print("")
-        print_guidance(
-            "Alternatively, you may want to use an existing metadata spreadsheet."
-        )
-        print_guidance("This would need to be manually placed at `data/metadata.tsv`.")
-        overall_status_ok = False  # Treat missing metadata as blocking the next step
+    # --- 3. Metadata File ---
+    print_section_header(f"3. Metadata File ('{analysis_dir}/metadata.tsv')" if analysis_dir else "3. Metadata File")
+    if not analysis_dir:
+        print_status_item("Cannot check metadata: analysis directory not configured.", "error")
+        overall_status_ok = False
     else:
-        print_status_item("`data/metadata.tsv` found.", "success")
+        metadata_path = Path(analysis_dir) / "metadata.tsv"
+        if not metadata_path.exists():
+            print_status_item(f"'{analysis_dir}/metadata.tsv' not found.", "error")
+            print_guidance(
+                "This file is generated by: `python mlip/dataflow.py preprocess -f <your_id_list.txt>`."
+            )
+            print("")
+            print_guidance(
+                "Alternatively, you may want to use an existing metadata spreadsheet."
+            )
+            print_guidance(f"This would need to be manually placed at '{analysis_dir}/metadata.tsv'.")
+            overall_status_ok = False  # Treat missing metadata as blocking the next step
+        else:
+            print_status_item(f"'{analysis_dir}/metadata.tsv' found.", "success")
         try:
             df = pd.read_csv(metadata_path, sep="\t", dtype=str).fillna(
                 ""
             )  # Read all as str, fill NaN with empty str
-            if df.empty and not list(
-                df.columns
-            ):  # No columns means truly empty file or just whitespace
-                print_status_item(
-                    "`data/metadata.tsv` is an empty file (no headers, no data).",
-                    "warning",
-                )
-                print_guidance(
-                    "Run `preprocess` if you haven't, or ensure it's correctly formatted."
-                )
-            elif (
-                df.iloc[:, 0].eq("").all() and len(df.columns) <= 1
-            ):  # Heuristic for empty content with just headers
-                print_status_item(
-                    "`data/metadata.tsv` appears to have headers but no data rows.",
-                    "warning",
-                )
-                print_guidance("Please populate the file with your sample information.")
-            else:
-                required_cols = ["SequencingId", "SampleId", "Replicate"]
-                missing_cols = [col for col in required_cols if col not in df.columns]
-                if missing_cols:
+                if df.empty and not list(
+                    df.columns
+                ):  # No columns means truly empty file or just whitespace
                     print_status_item(
-                        f"`data/metadata.tsv` is missing required columns: {', '.join(missing_cols)}.",
-                        "error",
+                        f"'{analysis_dir}/metadata.tsv' is an empty file (no headers, no data).",
+                        "warning",
                     )
-                    overall_status_ok = False
+                    print_guidance(
+                        "Run `preprocess` if you haven't, or ensure it's correctly formatted."
+                    )
+                elif (
+                    df.iloc[:, 0].eq("").all() and len(df.columns) <= 1
+                ):  # Heuristic for empty content with just headers
+                    print_status_item(
+                        f"'{analysis_dir}/metadata.tsv' appears to have headers but no data rows.",
+                        "warning",
+                    )
+                    print_guidance("Please populate the file with your sample information.")
                 else:
-                    print_status_item(
-                        "Required columns found in `data/metadata.tsv`.", "success"
-                    )
-                    # Check for non-empty SampleId and Replicate columns in data rows
-                    if df.empty:  # Only headers, no data rows
+                    required_cols = ["SequencingId", "SampleId", "Replicate"]
+                    missing_cols = [col for col in required_cols if col not in df.columns]
+                    if missing_cols:
                         print_status_item(
-                            "`data/metadata.tsv` has headers but no data rows.",
-                            "warning",
-                        )
-                        print_guidance(
-                            "Please populate it with your sample information."
-                        )
-                        overall_status_ok = False
-                    elif df["SampleId"].eq("").any() or df["Replicate"].eq("").any():
-                        print_status_item(
-                            "`data/metadata.tsv` has some empty values in 'SampleId' or 'Replicate'.",
+                            f"'{analysis_dir}/metadata.tsv' is missing required columns: {', '.join(missing_cols)}.",
                             "error",
-                        )
-                        print_guidance(
-                            "Ensure these are fully populated for all intended samples."
                         )
                         overall_status_ok = False
                     else:
                         print_status_item(
-                            "`data/metadata.tsv` appears populated.", "success"
+                            "Required columns found in metadata file.", "success"
                         )
-        except pd.errors.EmptyDataError:
-            print_status_item(
-                "`data/metadata.tsv` exists but is completely empty (cannot be parsed).",
-                "error",
-            )
-            print_guidance(
-                "Run `python mlip/dataflow.py preprocess -h` and follow instructions therein."
-            )
-            overall_status_ok = False
-        except Exception as e:
-            print_status_item(
-                f"Error reading or parsing `data/metadata.tsv`: {e}", "error"
-            )
-            overall_status_ok = False
+                        # Check for non-empty SampleId and Replicate columns in data rows
+                        if df.empty:  # Only headers, no data rows
+                            print_status_item(
+                                f"'{analysis_dir}/metadata.tsv' has headers but no data rows.",
+                                "warning",
+                            )
+                            print_guidance(
+                                "Please populate it with your sample information."
+                            )
+                            overall_status_ok = False
+                        elif df["SampleId"].eq("").any() or df["Replicate"].eq("").any():
+                            print_status_item(
+                                f"'{analysis_dir}/metadata.tsv' has some empty values in 'SampleId' or 'Replicate'.",
+                                "error",
+                            )
+                            print_guidance(
+                                "Ensure these are fully populated for all intended samples."
+                            )
+                            overall_status_ok = False
+                        else:
+                            print_status_item(
+                                "Metadata file appears populated.", "success"
+                            )
+            except pd.errors.EmptyDataError:
+                print_status_item(
+                    f"'{analysis_dir}/metadata.tsv' exists but is completely empty (cannot be parsed).",
+                    "error",
+                )
+                print_guidance(
+                    "Run `python mlip/dataflow.py preprocess -h` and follow instructions therein."
+                )
+                overall_status_ok = False
+            except Exception as e:
+                print_status_item(
+                    f"Error reading or parsing '{analysis_dir}/metadata.tsv': {e}", "error"
+                )
+                overall_status_ok = False
 
     return overall_status_ok
 
 
-def load_metadata_dictionary():
-    f = open("data/metadata.tsv", "r")
+def load_metadata_dictionary(analysis_dir):
+    f = open(f"{analysis_dir}/metadata.tsv", "r")
     reader = csv.DictReader(f, delimiter="\t")
     md_dict = defaultdict(lambda: defaultdict(list))
     counter = Counter()
@@ -1012,8 +1048,8 @@ def load_metadata_dictionary():
     return md_dict
 
 
-def samples_to_analyze():
-    manifest_filepath = Path("data/file_manifest.json")
+def samples_to_analyze(analysis_dir):
+    manifest_filepath = Path(analysis_dir) / "file_manifest.json"
     samples_with_valid_data = set()
 
     with open(manifest_filepath, "r") as f:
