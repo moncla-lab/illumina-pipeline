@@ -46,7 +46,14 @@ to receive feedback on where they are in the configuration process.
 
 #### Configuration file
 
-Copy the file `config.yml.template` to `config.yml`. Make appropriate edits, which will likely involve adjusting only `reference` (what's used as the reference sequence) and the `data_root_directory` (where data was downloaded) for a first run.
+Edit `config.yml` with appropriate values. For a first run, you'll likely need to adjust:
+- `analysis`: Name for your analysis (also becomes the output directory name)
+- `reference`: Reference key from `references.tsv` or path to custom reference ZIP
+- `data_root_directory`: Where BaseSpace/SRA data was downloaded
+
+Note: `config.yml` will be copied into your output directory for record-keeping.
+
+For a complete list of configuration options, see [Configuration documentation](./DOCUMENTATION.md#2-configuration).
 
 #### References
 We have [predefined references](./references.tsv). The simplest use case is to choose a key from the reference column to populate the config. The user can override these by defining their own with segments pulled from Genbank or using a custom reference. There is [extended documentation on references](./DOCUMENTATION.md#references) for more detail.
@@ -55,7 +62,7 @@ We have [predefined references](./references.tsv). The simplest use case is to c
 
 To move data out of the data folder and into this pipeline, a text file of sequencing experiment IDs corresponding to each FASTQ dataset, one per line, must be created at a known path we'll call `/path/to/fastqDatasetIDs.txt`. Note we say FASTQ dataset as this is technically a pair of FASTQ files. It's best to pull these from either BaseSpace sample sheet CSVs or SRA accessions.
 
-The first **preprocess** step looks at these IDs and builds a metadata spreadsheet at `data/metadata.tsv`:
+The first **preprocess** step looks at these IDs and builds a metadata spreadsheet at `{analysis}/metadata.tsv` (where `{analysis}` is the name specified in `config.yml`):
 ```
 python mlip/dataflow.py preprocess -f /path/to/sequencingExperimentIDs.txt
 ```
@@ -99,19 +106,19 @@ With data situated, the pipeline can be ran as:
 snakemake -j $NUMBER_OF_JOBS all
 ```
 
-$NUMBER_OF_JOBS should be at least 1, and no more than the number of cores on your computer. After this, the `data` directory should be filled with lots of files of various formats, many which contain relevant virological information.
+$NUMBER_OF_JOBS should be at least 1, and no more than the number of cores on your computer. After this, your analysis output directory (named per the `analysis` parameter in `config.yml`) should be filled with lots of files of various formats, many which contain relevant virological information.
 
 **Important**: Always review the consensus remapping differences report (`consensus_summary_report.tsv`) after running the pipeline to identify positions where consensus sequences changed between remapping iterations, which indicates potential mapping inconsistencies that should be investigated. When this occurs, consult the [additional documentation](DOCUMENTATION.md#check_consensus_summary).
 
 ### Outputs
 
-To bring up a directory tree of the `data` directory where you will find files of interest and be able to view certain plots, run:
+To bring up a directory tree of your analysis output directory where you will find files of interest and be able to view certain plots, run:
 
 ```
 python mlip/visualization.py
 ```
 
-Alternatively, just explore the data directory from your desktop. All paths below are assumed to be relative to the `data` directory. Anything enclosed in brackets are [Snakemake wildcards](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#snakefiles-wildcards) with further explanation in documentation. Relevant outputs include:
+Alternatively, just explore the analysis directory from your desktop. All paths below are assumed to be relative to your analysis output directory (e.g., `stephen-test/` if `analysis: "stephen-test"` in `config.yml`). Anything enclosed in brackets are [Snakemake wildcards](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#snakefiles-wildcards) with further explanation in documentation. Relevant outputs include:
 
 | File description                        | File path                                                     |
 | --------------------------------------- | ------------------------------------------------------------- |

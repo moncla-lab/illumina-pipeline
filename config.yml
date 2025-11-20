@@ -1,6 +1,6 @@
 analysis: ""                        # Name for the analysis, which will also be the output directory name
 reference: ""                       # Reference to be used
-data_root_directory: ""             # Directory where data from BaseSpaces has been downloaded
+data_root_directory: "~/BaseSpace"  # Directory where data from BaseSpaces has been downloaded
 number_of_remappings: 2             # How many remappings to use for final genomes/variants
 use_vapor: false                    # Use VAPOR to select sample specific references
 trimming_minimum_length: 50         # Discard reads below this length after trimming

@@ -94,9 +94,11 @@ You can now refer back to the [README](https://github.com/moncla-lab/illumina-pi
 
 ## 2. Configuration
 
-We use YAML (a practice recommended by Snakemake) to configure both tools and rules. See `config.yml.template` at the root of the repository, which contains our recommended default parameters. 
+We use YAML (a practice recommended by Snakemake) to configure both tools and rules. Edit `config.yml` at the root of the repository to configure your analysis. The configuration file will be copied into your output directory for record-keeping. 
 
 ### Description of individual configuration parameters
+
+- **`analysis`** - Name for your analysis, which also becomes the output directory name (e.g., `analysis: "stephen-test"` creates output in `stephen-test/`). This allows multiple analyses to coexist in the same repository.
 
 - **`reference`** - Determines what is used as the reference.  Works with multi-segmented viruses like influenza. See `references.tsv` for the exact accessions that are use, as well as the `fetch_reference_data` rule.
 
@@ -150,7 +152,7 @@ reference: "path/to/reference.zip"
 Upon running dataflow, this unzips into:
 
 ```
-data/reference/
+{analysis}/reference/
 ├─ SEGMENT1/
 │    ├─ sequence.fasta
 │    └─ metadata.gb
@@ -161,7 +163,7 @@ data/reference/
 ```
 
 **Expected structure**:
-Each `data/reference/SEGMENT/` folder must match the segment key (e.g. `HA`, `NA`) and contain exactly:
+Each `{analysis}/reference/SEGMENT/` folder must match the segment key (e.g. `HA`, `NA`) and contain exactly:
 - `sequence.fasta`
 - `metadata.gb`
 
@@ -266,7 +268,7 @@ Apologies for the over-correction! You're right, let's stick to the original bre
 
 Merges all sequencing experiments for a given sample replicate into single forward and reverse FASTQ files.
 
--   **Input (via `data/file_manifest.json` and wildcards):**
+-   **Input (via `{analysis}/file_manifest.json` and wildcards):**
     -   Paths to source `forward.fastq.gz` (or `.fastq`) and `reverse.fastq.gz` (or `.fastq`) files for experiments belonging to the specified sample and replicate.
     -   Information on whether source files are gzipped and if they are low-coverage.
 
@@ -275,7 +277,7 @@ Merges all sequencing experiments for a given sample replicate into single forwa
     -   Combined `reverse.fastq` (uncompressed) per sample replicate.
 
 -   **Process (Python function `concatenate_replicates_from_manifest_py`):**
-    -   Reads experiment details from `data/file_manifest.json`.
+    -   Reads experiment details from `{analysis}/file_manifest.json`.
     -   Excludes experiments marked as low-coverage.
     -   If source files are gzipped, they are decompressed in Python during reading.
     -   Contents are appended sequentially to the output FASTQ files.
@@ -580,20 +582,20 @@ Used to prepare consolidated variant data for analysis.
 ### Batch Rules (Summary)
 
 #### `full_coverage_summary`
-Merges coverage summaries from all final remapping replicates into a single file.  
-**Output**: `data/coverage-report.tsv`
+Merges coverage summaries from all final remapping replicates into a single file.
+**Output**: `{analysis}/coverage-report.tsv`
 
 #### `full_genome`
-Extracts a specific segment from all sample consensus FASTAs and concatenates into one.  
-**Output**: `data/{segment}.fasta`
+Extracts a specific segment from all sample consensus FASTAs and concatenates into one.
+**Output**: `{analysis}/{segment}.fasta`
 
 #### `all_variants`
-Combines sample-level merged variant calls into a single file.  
-**Output**: `data/variants.tsv`
+Combines sample-level merged variant calls into a single file.
+**Output**: `{analysis}/variants.tsv`
 
 #### `all_full_segments`
-Concatenates all segment FASTAs into a single file.  
-**Output**: `data/all.fasta`
+Concatenates all segment FASTAs into a single file.
+**Output**: `{analysis}/all.fasta`
 
 #### `all_preliminary`
 Dependency alias for triggering coverage summary.  
@@ -604,12 +606,12 @@ Dependency alias for full consensus outputs.
 **Depends on**: `full_consensus_summary`, `all_full_segments`
 
 #### `all_protein`
-Combines gene-specific protein FASTAs across samples.  
-**Output**: `data/protein/.done`
+Combines gene-specific protein FASTAs across samples.
+**Output**: `{analysis}/protein/.done`
 
 #### `zip`
-Packages non-intermediate project files, excluding large data (e.g., FASTQ, BAM).  
-**Output**: `data/project.zip`
+Packages non-intermediate project files, excluding large data (e.g., FASTQ, BAM).
+**Output**: `{analysis}/project.zip`
 
 #### `all`
 Top-level rule for generating all final deliverables.  
@@ -626,7 +628,7 @@ as well as
 They were generated with
 
 ```
-snakemake --dag data/{sample}/consensus.fasta | dot -Tsvg > pipeline.svg
+snakemake --dag {analysis}/{sample}/consensus.fasta | dot -Tsvg > pipeline.svg
 ```
 
 and we encourage the user to create a few and explore for themselves (though only for individual sample files, not for the batch rules as the charts would be huge).
@@ -643,9 +645,9 @@ This pipeline tries to do all of this and more, and users are encouraged to chec
 
 ## 5. Output produced
 
-### Pipeline Output Summary (`data/` directory)
+### Pipeline Output Summary (Analysis Output Directory)
 
-The `data/` directory contains all processed outputs from the viral deep sequencing pipeline, organized as follows:
+Your analysis output directory (named per the `analysis` parameter in `config.yml`) contains all processed outputs from the viral deep sequencing pipeline, organized as follows:
 
 #### Project-Level Summaries
 - `coverage-report.tsv` — Coverage summary across all final replicates.
@@ -666,7 +668,7 @@ Each directory (e.g. `be_w1`, `cb_com1`, `kc_com3`, etc.) contains the full pipe
 
 This structure supports both batch inspection and targeted downstream analyses.
 
-### Sample Output Summary: `data/{sample_id}/`
+### Sample Output Summary: `{analysis}/{sample_id}/`
 
 This directory contains all outputs for a given sample ID, including raw data, per-replicate processing, and final merged results.
 
@@ -693,17 +695,17 @@ This layout supports both early triage (coverage, consensus presence) and detail
 
 Within each replicate and remapping stage, segment-level results are organized under:
 
-`data/{sample}/replicate-{rep}/remapping-{n}/segments/{segment}/`
+`{analysis}/{sample}/replicate-{rep}/remapping-{n}/segments/{segment}/`
 
-For example:
-`data/bv_w1/replicate-1/remapping-2/segments/ha/`
+For example (assuming `analysis: "stephen-test"`):
+`stephen-test/bv_w1/replicate-1/remapping-2/segments/ha/`
 
 Each `{segment}/` directory contains all relevant files for that segment during a specific remapping pass. Below is a comprehensive list of each file.
 
-#### Files at the mapping_stage level  
+#### Files at the mapping_stage level
 
 ```
-data/{sample}/replicate-{replicate}/{mapping\_stage}/
+{analysis}/{sample}/replicate-{replicate}/{mapping\_stage}/
 ```
 
 | File/Folder              | Description                                                                                                                             |
@@ -730,11 +732,11 @@ data/{sample}/replicate-{replicate}/{mapping\_stage}/
 | `ml.tsv`                 | “Cleaned” variant table (filtered by `clean_varscan`) containing only non-frameshift variants.                                          |
 | `segments/` (directory)  | Per‐segment consensus outputs. See next table for details.                                                                              |
 
-#### Files  segment level
+#### Files at segment level
 
-**Location:**  
+**Location:**
 ```
-data/{sample}/replicate-{replicate}/{mapping\_stage}/segments/{segment}/
+{analysis}/{sample}/replicate-{replicate}/{mapping\_stage}/segments/{segment}/
 ```
 
 | File                  | Description                                                                                               |
