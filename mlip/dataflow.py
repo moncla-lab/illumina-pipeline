@@ -209,7 +209,7 @@ def preprocess(id_filepath, seq_key="Seq"):
     seq_key_pattern = re.compile(rf"_{seq_key}(\d+)", re.IGNORECASE)
     key_hash = {}
 
-    fieldnames = ["SequencingId", "SampleId", "Replicate"]
+    fieldnames = ["SequencingId", "SampleId", "Replicate", "ForwardFastqPath", "ReverseFastqPath"]
     os.makedirs(analysis_dir, exist_ok=True)
     f = open(f"{analysis_dir}/metadata.tsv", "w", newline="")
     writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
@@ -224,7 +224,8 @@ def preprocess(id_filepath, seq_key="Seq"):
         else:
             sample_id = ""
         writer.writerow(
-            {"SequencingId": seq_id, "SampleId": sample_id, "Replicate": ""}
+            {"SequencingId": seq_id, "SampleId": sample_id, "Replicate": "",
+             "ForwardFastqPath": "", "ReverseFastqPath": ""}
         )
 
     f.close()
@@ -308,6 +309,25 @@ def flow(args):
 
         if not sample_id or not sequencing_id_from_meta or not replicate_from_meta:
             continue
+
+        # Check for user-specified paths first (override auto-detection)
+        forward_override = row.get("ForwardFastqPath", "").strip()
+        reverse_override = row.get("ReverseFastqPath", "").strip()
+
+        if forward_override and reverse_override:
+            forward_path = Path(forward_override).expanduser()
+            reverse_path = Path(reverse_override).expanduser()
+            if forward_path.exists() and reverse_path.exists():
+                is_low_cov = fastq_is_low_coverage(str(forward_path)) or fastq_is_low_coverage(str(reverse_path))
+                experiment_entry = {
+                    "sequencing_id_from_metadata": sequencing_id_from_meta,
+                    "source_forward_path": str(forward_path.resolve()),
+                    "source_reverse_path": str(reverse_path.resolve()),
+                    "source_gzipped": True,
+                    "is_low_coverage": is_low_cov,
+                }
+                manifest_samples_data[sample_id][replicate_from_meta].append(experiment_entry)
+                continue  # Skip auto-detection
 
         sequencing_token_from_meta = tokenize(sequencing_id_from_meta)
         token_pattern = re.compile(rf"^{sequencing_token_from_meta}s\d+l\d+")
