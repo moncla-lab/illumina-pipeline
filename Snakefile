@@ -314,6 +314,7 @@ rule samtools:
         mapped=temp('data/{sample}/replicate-{replicate}/{mapping_stage}/mapped.bam'),
         sorted_=temp('data/{sample}/replicate-{replicate}/{mapping_stage}/sorted.bam'),
         index='data/{sample}/replicate-{replicate}/{mapping_stage}/sorted.bam.bai',
+        depth='data/{sample}/replicate-{replicate}/{mapping_stage}/depth.txt',
         stdout='data/{sample}/replicate-{replicate}/{mapping_stage}/samtools-stdout.txt',
         pileup=temp('data/{sample}/replicate-{replicate}/{mapping_stage}/samtools.pileup'),
         stderr='data/{sample}/replicate-{replicate}/{mapping_stage}/samtools-stderr.txt'
@@ -323,6 +324,7 @@ rule samtools:
             samtools view -S -b {input.sam} > {output.mapped} 2> {output.stderr}
             samtools sort {output.mapped} -o {output.sorted_} > {output.stdout} 2>> {output.stderr}
             samtools index {output.sorted_} >> {output.stdout} 2>> {output.stderr}
+            samtools depth {output.sorted_} > {output.depth} 2>> {output.stderr}
             samtools mpileup -a -A -d 0 -B -Q 0 \
                 -f {input.reference} {output.sorted_} > {output.pileup} 2>> {output.stderr}
         '''
