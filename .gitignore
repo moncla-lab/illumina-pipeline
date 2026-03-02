@@ -3,5 +3,4 @@ data
 __pycache__
 .snakemake
 .DS_Store
-config.yml
 .ipynb_checkpoints
