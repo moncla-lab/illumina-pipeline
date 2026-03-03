@@ -1,0 +1,31 @@
+# Build-DB: Annotated Influenza Reference Database Pipeline
+# Configuration for building per-segment VAPOR databases from NCBI Virus sequences.
+
+# A/goose/Guangdong/1/1996 NC_ reference accessions (one per segment).
+# These provide the coordinate anchor for annotation transfer.
+nc_references:
+  pb2: NC_007357.1
+  pb1: NC_007358.1
+  pa:  NC_007359.1
+  ha:  NC_007362.1
+  np:  NC_007360.1
+  na:  NC_007361.1
+  mp:  NC_007363.1
+  ns:  NC_007364.1
+
+segments: [pb2, pb1, pa, ha, np, na, mp, ns]
+
+# Uni12/Uni13 conserved termini for full-length segment detection
+uni12_variants: ["agcaaaagcagg", "agcgaaagcagg"]
+uni13_rc: "ccttgtttctact"
+hamming_distance_threshold: 1
+
+# Input sequences (downloaded from NCBI Virus)
+input_fasta: "sequences.fasta"
+
+# Metadata-aware TN93 clustering
+clustering:
+  tn93_threshold: 0.015      # 1.5% nucleotide divergence
+  year_bin_size: 2            # Group years into 2-year windows
+  min_seqs_per_group: 1       # Keep at least 1 seq per metadata group
+  genoflu_results: null       # Path to GenoFLU results.tsv (optional)

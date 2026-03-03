@@ -1,0 +1,248 @@
+"""
+Build-DB: Annotated Influenza Reference Database Pipeline
+
+Builds per-segment VAPOR reference databases from NCBI Virus sequences.
+Run: cd build-db && snakemake --cores 8
+"""
+
+import json
+import os
+import sys
+
+import build_db
+
+configfile: "config.yml"
+
+SEGMENTS = config["segments"]
+NC_REFS = config["nc_references"]
+UNI12_VARIANTS = config["uni12_variants"]
+UNI13_RC = config["uni13_rc"]
+HAMMING_THRESHOLD = config["hamming_distance_threshold"]
+INPUT_FASTA = config["input_fasta"]
+CLUSTERING = config.get("clustering", {})
+TN93_THRESHOLD = CLUSTERING.get("tn93_threshold", 0.015)
+YEAR_BIN_SIZE = CLUSTERING.get("year_bin_size", 2)
+MIN_SEQS_PER_GROUP = CLUSTERING.get("min_seqs_per_group", 1)
+GENOFLU_RESULTS = CLUSTERING.get("genoflu_results")
+
+
+wildcard_constraints:
+    segment="[^/]+"
+
+
+rule all:
+    input:
+        expand("output/db/{segment}/all.fasta", segment=SEGMENTS),
+        expand("output/db/{segment}/metadata.gb", segment=SEGMENTS),
+        expand("output/db/{segment}/sequence.fasta", segment=SEGMENTS),
+
+
+# ---------------------------------------------------------------------------
+# Step 2: Fetch NC_ references from NCBI
+# ---------------------------------------------------------------------------
+
+rule fetch_nc_references:
+    message:
+        "Fetching all NC_ GenBank references from NCBI..."
+    output:
+        genbanks=expand("references/{segment}/metadata.gb", segment=SEGMENTS),
+        fastas=expand("references/{segment}/sequence.fasta", segment=SEGMENTS)
+    run:
+        import time
+        from Bio import SeqIO
+
+        for segment in SEGMENTS:
+            accession = NC_REFS[segment]
+            gb_path = f"references/{segment}/metadata.gb"
+            fa_path = f"references/{segment}/sequence.fasta"
+            os.makedirs(os.path.dirname(gb_path), exist_ok=True)
+
+            print(f"  Fetching {accession} for {segment}...")
+            shell(
+                f"efetch -db nuccore -id {accession} -format genbank > {gb_path}"
+            )
+            time.sleep(1)
+
+            record = SeqIO.read(gb_path, "genbank")
+            record.description = f"{record.id} {segment} {record.description}"
+            SeqIO.write(record, fa_path, "fasta")
+
+
+# ---------------------------------------------------------------------------
+# Step 3: Parse & filter sequences
+# ---------------------------------------------------------------------------
+
+rule parse_sequences:
+    message:
+        "Parsing and filtering {INPUT_FASTA}..."
+    input:
+        fasta=INPUT_FASTA
+    output:
+        strain_segment_map="intermediate/strain_segment_map.json",
+        stats="intermediate/parse_stats.json",
+        segment_fastas=expand("intermediate/segments/{segment}.fasta", segment=SEGMENTS)
+    run:
+        strain_segment_seqs, strain_segments, stats = build_db.parse_all_sequences(
+            input.fasta,
+            UNI12_VARIANTS,
+            UNI13_RC,
+            hamming_threshold=HAMMING_THRESHOLD,
+            qc_dir="intermediate/qc",
+        )
+        complete_strains = build_db.find_complete_genomes(strain_segments)
+        stats["complete_strains"] = len(complete_strains)
+
+        segment_records, strain_segment_map = build_db.deduplicate_sequences(
+            strain_segment_seqs, complete_strains
+        )
+        build_db.write_segment_fastas(segment_records, "intermediate/segments")
+
+        for seg, recs in segment_records.items():
+            stats[f"{seg}_sequences"] = len(recs)
+
+        with open(output.strain_segment_map, "w") as f:
+            json.dump(strain_segment_map, f, indent=2)
+        with open(output.stats, "w") as f:
+            json.dump(stats, f, indent=2)
+
+        print(f"Parsed {stats['total_sequences']} sequences")
+        print(f"Found {stats['complete_strains']} complete genomes")
+        for seg in SEGMENTS:
+            print(f"  {seg}: {stats.get(f'{seg}_sequences', 0)} sequences")
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Align to NC_ references with MAFFT
+# ---------------------------------------------------------------------------
+
+rule align_to_reference:
+    message:
+        "Aligning {wildcards.segment} sequences to NC_ reference with MAFFT..."
+    input:
+        queries="intermediate/segments/{segment}.fasta",
+        reference="references/{segment}/sequence.fasta"
+    output:
+        alignment="intermediate/alignments/{segment}.afa"
+    threads: 4
+    shell:
+        """
+        mafft --preservecase --auto --thread {threads} \
+            --addfragments {input.queries} \
+            {input.reference} \
+            > {output.alignment}
+        """
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Coordinate transfer & GenBank creation
+# ---------------------------------------------------------------------------
+
+rule create_genbank_files:
+    message:
+        "Creating annotated GenBank files for segment {wildcards.segment}..."
+    input:
+        alignment="intermediate/alignments/{segment}.afa",
+        ref_genbank="references/{segment}/metadata.gb"
+    output:
+        done=touch("intermediate/genbanks/{segment}/.done")
+    params:
+        ref_accession=lambda wildcards: NC_REFS[wildcards.segment],
+        output_dir=lambda wildcards: f"intermediate/genbanks/{wildcards.segment}"
+    run:
+        created = build_db.create_genbank_files_for_segment(
+            input.alignment,
+            input.ref_genbank,
+            params.ref_accession,
+            params.output_dir,
+        )
+        print(f"Created {len(created)} GenBank files for {wildcards.segment}")
+
+
+# ---------------------------------------------------------------------------
+# Step 6: Metadata-aware TN93 clustering
+# ---------------------------------------------------------------------------
+
+rule parse_strain_metadata:
+    message:
+        "Parsing metadata for segment {wildcards.segment}..."
+    input:
+        fasta="intermediate/segments/{segment}.fasta"
+    output:
+        groups="intermediate/metadata/{segment}_groups.json",
+        metadata="intermediate/metadata/{segment}_metadata.json"
+    run:
+        groups, metadata = build_db.build_metadata_groups(
+            input.fasta,
+            year_bin_size=YEAR_BIN_SIZE,
+            genoflu_results=GENOFLU_RESULTS,
+            segment_name=wildcards.segment,
+        )
+        # Convert tuple keys to strings for JSON
+        serializable_groups = {
+            "|".join(str(k) for k in key): accs
+            for key, accs in groups.items()
+        }
+        with open(output.groups, "w") as f:
+            json.dump(serializable_groups, f, indent=2)
+        with open(output.metadata, "w") as f:
+            json.dump(metadata, f, indent=2)
+        print(f"  {wildcards.segment}: {len(groups)} metadata groups, "
+              f"{sum(len(v) for v in groups.values())} sequences")
+
+
+rule tn93_cluster_by_group:
+    message:
+        "TN93 clustering for segment {wildcards.segment}..."
+    input:
+        fasta="intermediate/segments/{segment}.fasta",
+        groups="intermediate/metadata/{segment}_groups.json"
+    output:
+        clustered="intermediate/clustered/{segment}.fasta"
+    run:
+        with open(input.groups) as f:
+            serialized_groups = json.load(f)
+        # Restore group keys (string form is fine for clustering)
+        groups = {key: accs for key, accs in serialized_groups.items()}
+
+        work_dir = f"intermediate/clustered/{wildcards.segment}_work"
+        n_centroids = build_db.cluster_by_metadata_groups(
+            input.fasta,
+            groups,
+            output.clustered,
+            tn93_threshold=TN93_THRESHOLD,
+            min_seqs_per_group=MIN_SEQS_PER_GROUP,
+            work_dir=work_dir,
+        )
+        print(f"  {wildcards.segment}: {n_centroids} centroid sequences after clustering")
+
+
+# ---------------------------------------------------------------------------
+# Step 7: Assemble final database
+# ---------------------------------------------------------------------------
+
+rule assemble_database:
+    message:
+        "Assembling final database for segment {wildcards.segment}..."
+    input:
+        clustered="intermediate/clustered/{segment}.fasta",
+        nc_fasta="references/{segment}/sequence.fasta",
+        nc_genbank="references/{segment}/metadata.gb",
+        genbanks_done="intermediate/genbanks/{segment}/.done"
+    output:
+        all_fasta="output/db/{segment}/all.fasta",
+        metadata_gb="output/db/{segment}/metadata.gb",
+        sequence_fasta="output/db/{segment}/sequence.fasta"
+    params:
+        nc_accession=lambda wildcards: NC_REFS[wildcards.segment],
+        genbanks_dir=lambda wildcards: f"intermediate/genbanks/{wildcards.segment}",
+        output_dir=lambda wildcards: f"output/db/{wildcards.segment}"
+    run:
+        n = build_db.assemble_segment_database(
+            input.clustered,
+            input.nc_fasta,
+            input.nc_genbank,
+            params.nc_accession,
+            params.genbanks_dir,
+            params.output_dir,
+        )
+        print(f"  {wildcards.segment}: {n} sequences in final database")

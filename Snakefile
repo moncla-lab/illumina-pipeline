@@ -41,37 +41,80 @@ REFERENCE = config['reference']
 USING_ZIP = REFERENCE.endswith(".zip")
 reference_dictionary = load_reference_dictionary(REFERENCE, USING_ZIP)
 metadata_dictionary = load_metadata_dictionary(ANALYSIS_DIR)
-SAMPLES = samples_to_analyze(ANALYSIS_DIR)
-DUPLICATE_SAMPLES = get_duplicate_samples(metadata_dictionary)
 SEGMENTS = load_segments(config, ANALYSIS_DIR)
 NUMBER_OF_REMAPPINGS = config['number_of_remappings']
+REFERENCE_MATRIX = load_reference_matrix(ANALYSIS_DIR)
+
+# Partition samples: negative controls get a truncated pipeline (initial mapping + coverage only)
+ALL_SAMPLES = samples_to_analyze(ANALYSIS_DIR)
+NEGATIVE_CONTROLS = get_negative_control_samples(ANALYSIS_DIR)
+ANALYSIS_SAMPLES = [s for s in ALL_SAMPLES if s not in NEGATIVE_CONTROLS]
+CONTROL_SAMPLES = [s for s in ALL_SAMPLES if s in NEGATIVE_CONTROLS]
+DUPLICATE_SAMPLES = [
+    s for s in get_duplicate_samples(metadata_dictionary)
+    if s not in NEGATIVE_CONTROLS
+]
+
+# Validate VAPOR databases if enabled
+if config.get('use_vapor', False) and not USING_ZIP:
+    missing_dbs = [seg for seg in SEGMENTS
+                   if not os.path.exists(data(f'reference/{seg}/all.fasta'))]
+    if missing_dbs:
+        print(f"ERROR: use_vapor is enabled but VAPOR databases missing for: {', '.join(missing_dbs)}")
+        print(f"Expected: {ANALYSIS_DIR}/reference/{{segment}}/all.fasta for each segment")
+        print("Build VAPOR databases first, or set use_vapor: false in config.yml")
+        sys.exit(1)
+
+# Build per-accession mappings from the reference matrix
+ACCESSION_TO_SEGMENT = {}
+if REFERENCE_MATRIX:
+    for sample_data in REFERENCE_MATRIX.values():
+        for segment, accession in sample_data.items():
+            ACCESSION_TO_SEGMENT[accession] = segment
+UNIQUE_ACCESSIONS = sorted(set(ACCESSION_TO_SEGMENT.keys()))
 
 if not USING_ZIP:
-    rule fetch_reference_data:
+    rule fetch_accession:
         message:
-            'Fetching reference data for segment {wildcards.segment}...'
+            'Fetching reference data for accession {wildcards.accession}...'
         output:
-            fasta=data('reference/{segment}/sequence.fasta'),
-            genbank=data('reference/{segment}/metadata.gb')
+            fasta=data('references/{accession}/sequence.fasta'),
+            genbank=data('references/{accession}/metadata.gb')
         resources:
             ncbi_fetches=1
         params:
-            genbank_accession=(
-                lambda wildcards:
-                reference_dictionary[wildcards.segment]['genbank_accession']
-            ),
+            segment_key=lambda wildcards: ACCESSION_TO_SEGMENT[wildcards.accession]
         shell:
             '''
                 efetch -db nuccore \
-                    -id {params.genbank_accession} \
+                    -id {wildcards.accession} \
                     -format genbank \
                     > {output.genbank}
 
                 efetch -db nuccore \
-                    -id {params.genbank_accession} \
+                    -id {wildcards.accession} \
                     -format fasta \
-                | seqkit replace -p "^(.+)" -r "{wildcards.segment} genbank"\
+                | seqkit replace -p "^(.+)" -r "{params.segment_key} genbank"\
                     > {output.fasta}
+            '''
+
+    rule populate_default_segment_reference:
+        message:
+            'Populating default reference for segment {wildcards.segment}...'
+        input:
+            fasta=lambda wildcards: data(
+                f'references/{reference_dictionary[wildcards.segment]["genbank_accession"]}/sequence.fasta'
+            ),
+            genbank=lambda wildcards: data(
+                f'references/{reference_dictionary[wildcards.segment]["genbank_accession"]}/metadata.gb'
+            )
+        output:
+            fasta=data('reference/{segment}/sequence.fasta'),
+            genbank=data('reference/{segment}/metadata.gb')
+        shell:
+            '''
+            cp {input.fasta} {output.fasta}
+            cp {input.genbank} {output.genbank}
             '''
 
 rule build_full_reference:
@@ -85,11 +128,68 @@ rule build_full_reference:
         'cat {input} > {output}'
 
 
+def assemble_sample_reference_input(wildcards):
+    """Get per-sample reference FASTAs from the reference matrix."""
+    if USING_ZIP or not REFERENCE_MATRIX or wildcards.sample not in REFERENCE_MATRIX:
+        return expand(data('reference/{segment}/sequence.fasta'), segment=SEGMENTS)
+    sample_accessions = REFERENCE_MATRIX[wildcards.sample]
+    default_fastas = [
+        data(f'references/{sample_accessions[seg]}/sequence.fasta')
+        for seg in SEGMENTS
+    ]
+    if config.get('use_vapor', False) and wildcards.sample not in NEGATIVE_CONTROLS:
+        vapor_fastas = expand(
+            data('{sample}/vapor/{segment}.fa'),
+            sample=wildcards.sample, segment=SEGMENTS
+        )
+        accession_files = expand(
+            data('{sample}/vapor/{segment}_accession.txt'),
+            sample=wildcards.sample, segment=SEGMENTS
+        )
+        # Layout: [default_fastas..., vapor_fastas..., accession_files...]
+        return default_fastas + vapor_fastas + accession_files
+    return default_fastas
+
+
+rule assemble_sample_reference:
+    message:
+        'Assembling per-sample reference for {wildcards.sample}...'
+    input:
+        assemble_sample_reference_input
+    output:
+        data('{sample}/reference/sequences.fasta')
+    run:
+        n = len(SEGMENTS)
+        use_vapor = config.get('use_vapor', False) and wildcards.sample not in NEGATIVE_CONTROLS
+        if use_vapor:
+            default_fastas = list(input)[:n]
+            vapor_fastas = list(input)[n:2*n]
+            accession_files = list(input)[2*n:]
+            with open(output[0], 'w') as out:
+                for i, segment in enumerate(SEGMENTS):
+                    with open(accession_files[i]) as f:
+                        acc = f.read().strip()
+                    if acc and acc != "VAPOR_FAILED" and os.path.getsize(vapor_fastas[i]) > 0:
+                        # Use VAPOR FASTA, rename header to segment convention
+                        with open(vapor_fastas[i]) as vf:
+                            lines = vf.readlines()
+                        out.write(f">{segment} genbank\n")
+                        out.writelines(lines[1:])  # sequence lines only
+                    else:
+                        with open(default_fastas[i]) as df:
+                            out.write(df.read())
+        else:
+            with open(output[0], 'w') as out:
+                for fasta_path in input:
+                    with open(fasta_path) as f_in:
+                        out.write(f_in.read())
+
+
 def get_genbank_input(wildcards):
     if USING_ZIP:
         return data(f"reference/{wildcards.segment}/metadata.gb")
     else:
-        return rules.fetch_reference_data.output.genbank
+        return rules.populate_default_segment_reference.output.genbank
 
 
 rule genbank_to_gtf:
@@ -209,52 +309,79 @@ rule trimmomatic:
                 > {output.stdout} 2> {output.log}
         '''
 
-#rule vapor_segment:
-#    input:
-#        fastq=rules.trimmomatic.output.concat,
-#        reference_db=data('reference/{segment}/all.fasta'),
-#        mlip_reference=data('reference/{segment}/sequence.fasta')
-#    output:
-#        vapor_reference=data('{sample}/replicate-{replicate}/initial_reference_{segment}.fa'),
-#        vapor_id=data('{sample}/replicate-{replicate}/initial_id_{segment}.txt'),
-#        unaligned=data('{sample}/replicate-{replicate}/initial_unaligned_{segment}.fasta'),
-#        aligned=data('{sample}/replicate-{replicate}/initial_aligned_{segment}.fasta')
-#    params:
-#        data('{sample}/replicate-{replicate}/initial_reference_{segment}')
-#    shell:
-#        '''
-#            vapor.py -m .01 -fq {input.fastq} -fa {input.reference_db} -o {params}
-#            head -n 1 {output.vapor_reference} | cut -c 2- > {output.vapor_id}
-#            sed -i '1s/.*/>{wildcards.segment} vapor/' {output.vapor_reference}
-#            cat {input.mlip_reference} {output.vapor_reference} > {output.unaligned}
-#            mafft --preservecase {output.unaligned} > {output.aligned}
-#        '''
-#
-#rule hybrid_segment:
-#    input:
-#        rules.vapor_segment.output.aligned
-#    output:
-#        data('{sample}/replicate-{replicate}/hybrid_{segment}.fasta'),
-#    run:
-#        fill(input[0], output[0])
-#
-#rule hybrid_reference:
-#    input:
-#        expand(
-#            data('{{sample}}/replicate-{{replicate}}/hybrid_{segment}.fasta'),
-#            segment=SEGMENTS
-#        )
-#    output:
-#        data('{sample}/replicate-{replicate}/reference.fasta')
-#    shell:
-#        'cat {input} > {output}'
+if config.get('use_vapor', False) and not USING_ZIP:
+    def concat_reads_for_vapor_input(wildcards):
+        replicates = metadata_dictionary[wildcards.sample].keys()
+        read_types = [
+            'forward_paired.fastq', 'reverse_paired.fastq',
+            'forward_unpaired.fastq', 'reverse_unpaired.fastq'
+        ]
+        return [
+            data(f'{wildcards.sample}/replicate-{rep}/{rt}')
+            for rep in replicates for rt in read_types
+        ]
+
+    rule concat_reads_for_vapor:
+        message:
+            'Concatenating reads for VAPOR ({wildcards.sample})...'
+        input:
+            concat_reads_for_vapor_input
+        output:
+            temp(data('{sample}/vapor/all_reads.fastq'))
+        shell:
+            'cat {input} > {output}'
+
+    rule vapor_select:
+        message:
+            'Running VAPOR for {wildcards.sample} segment {wildcards.segment}...'
+        input:
+            fastq=data('{sample}/vapor/all_reads.fastq'),
+            reference_db=data('reference/{segment}/all.fasta')
+        output:
+            vapor_fasta=data('{sample}/vapor/{segment}.fa'),
+            accession=data('{sample}/vapor/{segment}_accession.txt')
+        shell:
+            '''
+            set +e
+            VAPOR_OUTPUT=$(vapor.py -fq {input.fastq} -fa {input.reference_db} 2>/dev/null)
+            VAPOR_EXIT=$?
+            set -e
+
+            if [ $VAPOR_EXIT -eq 0 ] && [ -n "$VAPOR_OUTPUT" ]; then
+                ACCESSION=$(echo "$VAPOR_OUTPUT" | tail -1 | awk -F'\\t' '{{print $NF}}' | sed 's/^>//' | awk '{{print $1}}')
+                if [ -n "$ACCESSION" ]; then
+                    echo "$ACCESSION" > {output.accession}
+                    seqkit grep -p "$ACCESSION" {input.reference_db} > {output.vapor_fasta}
+                else
+                    echo "VAPOR_FAILED" > {output.accession}
+                    touch {output.vapor_fasta}
+                fi
+            else
+                echo "VAPOR_FAILED" > {output.accession}
+                touch {output.vapor_fasta}
+            fi
+            '''
+
+    rule fetch_vapor_genbank:
+        message:
+            'Copying GenBank for VAPOR-selected reference ({wildcards.sample}/{wildcards.segment})...'
+        input:
+            accession_file=data('{sample}/vapor/{segment}_accession.txt')
+        output:
+            genbank=data('{sample}/vapor/{segment}.gb')
+        run:
+            with open(input.accession_file) as f:
+                accession = f.read().strip()
+            if accession and accession != "VAPOR_FAILED":
+                db_genbank = data(f'reference/{wildcards.segment}/genbanks/{accession}.gb')
+                shell(f'cp {db_genbank} {output.genbank}')
+            else:
+                default_gb = data(f'reference/{wildcards.segment}/metadata.gb')
+                shell(f'cp {default_gb} {output.genbank}')
 
 def situate_reference_input(wildcards):
     if wildcards.mapping_stage == 'initial':
-        if config['use_vapor']:
-            return data(f'{wildcards.sample}/replicate-{wildcards.replicate}/reference.fasta')
-        else:
-            return data('reference/sequences.fasta'),
+        return data(f'{wildcards.sample}/reference/sequences.fasta')
     elif wildcards.mapping_stage == 'remapping-1':
         return data(f'{wildcards.sample}/replicate-{wildcards.replicate}/initial/filler.fasta')
     mapping_stage_int = int(wildcards.mapping_stage.split('-')[1]) - 1
@@ -500,14 +627,30 @@ rule call_sample_consensus:
     run:
         call_sample_consensus(input, output[0])
 
+def sample_proteins_genbank_input(wildcards):
+    """Get GenBank files for this sample's references."""
+    if config.get('use_vapor', False) and not USING_ZIP and wildcards.sample not in NEGATIVE_CONTROLS:
+        return [data(f'{wildcards.sample}/vapor/{seg}.gb') for seg in SEGMENTS]
+    if not USING_ZIP and REFERENCE_MATRIX and wildcards.sample in REFERENCE_MATRIX:
+        return [
+            data(f'references/{REFERENCE_MATRIX[wildcards.sample][seg]}/metadata.gb')
+            for seg in SEGMENTS
+        ]
+    return expand(data('reference/{segment}/metadata.gb'), segment=SEGMENTS)
+
+
 rule call_sample_proteins:
     input:
-        rules.call_sample_consensus.output[0],
-        expand(data('reference/{segment}/metadata.gb'), segment=SEGMENTS)
+        consensus=rules.call_sample_consensus.output[0],
+        genbanks=sample_proteins_genbank_input
     output:
         directory(data('{sample}/protein'))
     run:
-        translate_consensus_genes(input[0], output[0], wildcards.sample, ANALYSIS_DIR)
+        genbank_paths = dict(zip(SEGMENTS, input.genbanks))
+        translate_consensus_genes(
+            input.consensus, output[0], wildcards.sample, ANALYSIS_DIR,
+            genbank_paths=genbank_paths
+        )
 
 #rule multiqc:
 #    message:
@@ -524,14 +667,30 @@ rule call_sample_proteins:
 #    shell:
 #        'multiqc -f {params} --outdir {params}'
 
+def coding_regions_genbank_input(wildcards):
+    """Get GenBank files for this sample's references."""
+    if config.get('use_vapor', False) and not USING_ZIP and wildcards.sample not in NEGATIVE_CONTROLS:
+        return [data(f'{wildcards.sample}/vapor/{seg}.gb') for seg in SEGMENTS]
+    if not USING_ZIP and REFERENCE_MATRIX and wildcards.sample in REFERENCE_MATRIX:
+        return [
+            data(f'references/{REFERENCE_MATRIX[wildcards.sample][seg]}/metadata.gb')
+            for seg in SEGMENTS
+        ]
+    return expand(data('reference/{segment}/metadata.gb'), segment=SEGMENTS)
+
+
 rule coding_regions:
     input:
-        annotated_references=expand(data('reference/{segment}/metadata.gb'), segment=SEGMENTS),
+        annotated_references=coding_regions_genbank_input,
         replicate_consensus=rules.full_consensus.output[0]
     output:
         data('{sample}/replicate-{replicate}/{mapping_stage}/coding_regions.json')
     run:
-        extract_coding_regions_io(SEGMENTS, input.replicate_consensus, output[0], ANALYSIS_DIR)
+        genbank_paths = dict(zip(SEGMENTS, input.annotated_references))
+        extract_coding_regions_io(
+            SEGMENTS, input.replicate_consensus, output[0], ANALYSIS_DIR,
+            genbank_paths=genbank_paths
+        )
 
 rule annotate_varscan:
     input:
@@ -586,10 +745,18 @@ rule visualize_replicate_calls:
 def full_coverage_summary_input(wildcards):
     coverage_filepaths = []
     for sample, replicates in metadata_dictionary.items():
+        if sample not in set(ALL_SAMPLES):
+            continue
         for replicate in replicates.keys():
-            coverage_filepaths.append(
-                data(f'{sample}/replicate-{replicate}/remapping-{NUMBER_OF_REMAPPINGS}/coverage-report.tsv')
-            )
+            if sample in NEGATIVE_CONTROLS:
+                # Controls only run initial mapping
+                coverage_filepaths.append(
+                    data(f'{sample}/replicate-{replicate}/initial/coverage-report.tsv')
+                )
+            else:
+                coverage_filepaths.append(
+                    data(f'{sample}/replicate-{replicate}/remapping-{NUMBER_OF_REMAPPINGS}/coverage-report.tsv')
+                )
     return coverage_filepaths
 
 
@@ -602,11 +769,11 @@ rule full_coverage_summary:
 
 rule full_genome:
     input:
-        expand(data('{sample}/consensus.fasta'), sample=SAMPLES)
+        expand(data('{sample}/consensus.fasta'), sample=ANALYSIS_SAMPLES)
     output:
         data('{segment}.fasta')
     params:
-        samples=' '.join(SAMPLES)
+        samples=' '.join(ANALYSIS_SAMPLES)
     shell:
         '''
           for sample in {params.samples}; do
@@ -686,7 +853,7 @@ rule aggregate_all_consensus_summary:
     message:
         "Aggregating all sample consensus summary reports into a final project summary..."
     input:
-        expand(data("{sample}/consensus_summary_report.tsv"), sample=SAMPLES)
+        expand(data("{sample}/consensus_summary_report.tsv"), sample=ANALYSIS_SAMPLES)
     output:
         data("consensus_summary_report.tsv")
     run:
@@ -699,6 +866,62 @@ rule all_variants:
     output: data('variants.tsv')
     run:
         merge_variant_calls(input.tsv, output[0])
+
+rule collect_segment_references:
+    message:
+        'Collecting reference sequences for segment {wildcards.segment}...'
+    input:
+        default=data('reference/{segment}/sequence.fasta'),
+        sample_refs=expand(
+            data('{sample}/reference/sequences.fasta'),
+            sample=DUPLICATE_SAMPLES
+        )
+    output:
+        fasta=data('harmonization/{segment}/references.fasta'),
+        mapping=data('harmonization/{segment}/sample_mapping.json')
+    params:
+        samples=DUPLICATE_SAMPLES
+    run:
+        collect_segment_references_py(
+            default_fasta=input.default,
+            sample_ref_fastas=input.sample_refs,
+            samples=params.samples,
+            segment=wildcards.segment,
+            output_fasta=output.fasta,
+            output_mapping=output.mapping
+        )
+
+rule align_segment_references:
+    message:
+        'Aligning reference sequences for segment {wildcards.segment}...'
+    input:
+        data('harmonization/{segment}/references.fasta')
+    output:
+        data('harmonization/{segment}/aligned.fasta')
+    shell:
+        'mafft --preservecase --auto {input} > {output}'
+
+rule harmonize_variants:
+    message:
+        'Harmonizing variant coordinates across samples...'
+    input:
+        variants=rules.all_variants.output[0],
+        alignments=expand(
+            data('harmonization/{segment}/aligned.fasta'),
+            segment=SEGMENTS
+        ),
+        mappings=expand(
+            data('harmonization/{segment}/sample_mapping.json'),
+            segment=SEGMENTS
+        )
+    output:
+        data('variants_harmonized.tsv')
+    run:
+        segment_alignments = dict(zip(SEGMENTS, input.alignments))
+        segment_mappings = dict(zip(SEGMENTS, input.mappings))
+        harmonize_variant_positions(
+            input.variants, segment_alignments, segment_mappings, output[0]
+        )
 
 #rule full_consensus_summary:
 #    input:
@@ -730,7 +953,7 @@ rule all_consensus:
 
 rule all_protein:
     input:
-        expand(data('{sample}/protein'), sample=SAMPLES),
+        expand(data('{sample}/protein'), sample=ANALYSIS_SAMPLES),
         genes=rules.gene_list.output[0]
     output:
         data("protein/.done")
@@ -750,11 +973,13 @@ rule zip:
     output:
         data('project.zip')
     shell:
-        'zip -r {output} data -x "*.fastq" "*.bam" "*.sam" "*.pileup"'
+        'zip -r {output} {ANALYSIS_DIR} -x "*.fastq" "*.bam" "*.sam" "*.pileup"'
 
 def preserved_bam_input(wildcards):
     bam_filepaths = []
     for sample, replicates in metadata_dictionary.items():
+        if sample in NEGATIVE_CONTROLS:
+            continue
         for replicate in replicates.keys():
             bam_filepaths.append(
                 data(f'{sample}/replicate-{replicate}/final.bam')
@@ -784,13 +1009,28 @@ rule copy_config:
     shell:
         "cp {input} {output}"
 
+def negative_control_targets(wildcards):
+    """Negative controls only run through initial mapping + coverage."""
+    targets = []
+    for sample in CONTROL_SAMPLES:
+        for replicate in metadata_dictionary[sample].keys():
+            targets.append(
+                data(f'{sample}/replicate-{replicate}/initial/coverage-report.tsv')
+            )
+    return targets
+
+
 rule all:
     input:
+        # Full pipeline for analysis samples
         rules.copy_config.output,
         rules.all_preliminary.input,
         rules.all_consensus.input,
         rules.all_protein.output,
         rules.all_variants.output,
+        rules.harmonize_variants.output,
         rules.zip.output,
         rules.aggregate_all_consensus_summary.output,
-        preserved_bam_input
+        preserved_bam_input,
+        # Truncated pipeline for negative controls (initial mapping + coverage only)
+        negative_control_targets

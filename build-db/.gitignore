@@ -1,0 +1,10 @@
+# Snakemake metadata
+.snakemake/
+
+# Pipeline intermediates
+intermediate/
+references/
+output/
+
+# Input data (too large for git)
+sequences.fasta

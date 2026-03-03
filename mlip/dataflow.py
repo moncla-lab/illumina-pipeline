@@ -209,7 +209,7 @@ def preprocess(id_filepath, seq_key="Seq"):
     seq_key_pattern = re.compile(rf"_{seq_key}(\d+)", re.IGNORECASE)
     key_hash = {}
 
-    fieldnames = ["SequencingId", "SampleId", "Replicate"]
+    fieldnames = ["SequencingId", "SampleId", "Replicate", "NegativeControl", "ForwardPath", "ReversePath"]
     os.makedirs(analysis_dir, exist_ok=True)
     f = open(f"{analysis_dir}/metadata.tsv", "w", newline="")
     writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
@@ -224,7 +224,8 @@ def preprocess(id_filepath, seq_key="Seq"):
         else:
             sample_id = ""
         writer.writerow(
-            {"SequencingId": seq_id, "SampleId": sample_id, "Replicate": ""}
+            {"SequencingId": seq_id, "SampleId": sample_id, "Replicate": "",
+             "NegativeControl": "", "ForwardPath": "", "ReversePath": ""}
         )
 
     f.close()
@@ -268,6 +269,48 @@ def fastq_is_low_coverage(filepath, min_reads=50):
         return True
 
 
+def _validate_custom_paths(row):
+    """Validate ForwardPath/ReversePath: both must be specified or neither.
+    Returns (forward_path, reverse_path) or (None, None) if not using custom paths.
+    Exits with error if validation fails.
+    """
+    fwd = row.get("ForwardPath", "").strip()
+    rev = row.get("ReversePath", "").strip()
+    if fwd and rev:
+        fwd_path = Path(fwd).expanduser()
+        rev_path = Path(rev).expanduser()
+        if not fwd_path.exists():
+            sys.stderr.write(f"\nERROR: ForwardPath does not exist: {fwd_path}\n")
+            sys.stderr.write(f"       Row: SequencingId={row['SequencingId']}, SampleId={row['SampleId']}\n")
+            sys.exit(1)
+        if not rev_path.exists():
+            sys.stderr.write(f"\nERROR: ReversePath does not exist: {rev_path}\n")
+            sys.stderr.write(f"       Row: SequencingId={row['SequencingId']}, SampleId={row['SampleId']}\n")
+            sys.exit(1)
+        return str(fwd_path.resolve()), str(rev_path.resolve())
+    elif fwd or rev:
+        sys.stderr.write(
+            f"\nERROR: Both ForwardPath and ReversePath must be specified, or neither.\n"
+            f"       Row: SequencingId={row['SequencingId']}, SampleId={row['SampleId']}\n"
+        )
+        sys.exit(1)
+    return None, None
+
+
+def _custom_path_entry(row, fwd_path, rev_path):
+    """Build a manifest experiment entry from custom FASTQ paths."""
+    is_gzipped = fwd_path.endswith(".gz")
+    is_low_cov = (fastq_is_low_coverage(fwd_path) if is_gzipped
+                  else fastq_is_low_coverage_sra_generic(fwd_path))
+    return {
+        "sequencing_id_from_metadata": row["SequencingId"],
+        "source_forward_path": fwd_path,
+        "source_reverse_path": rev_path,
+        "source_gzipped": is_gzipped,
+        "is_low_coverage": is_low_cov,
+    }
+
+
 def flow(args):
     # manifest_samples_data will store: {sample_id: {replicate_num: [exp_details_list]}}
     manifest_samples_data = defaultdict(lambda: defaultdict(list))
@@ -278,9 +321,7 @@ def flow(args):
         print("ERROR: 'analysis' key not found in config.yml.")
         sys.exit(1)
 
-    with open(f"{analysis_dir}/metadata.tsv", "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        rows = list(reader)
+    rows = load_metadata_rows(analysis_dir)
 
     data_root = Path(config["data_root_directory"]).expanduser()
 
@@ -307,6 +348,13 @@ def flow(args):
         replicate_from_meta = row["Replicate"]
 
         if not sample_id or not sequencing_id_from_meta or not replicate_from_meta:
+            continue
+
+        # Check for custom FASTQ paths first
+        fwd_custom, rev_custom = _validate_custom_paths(row)
+        if fwd_custom:
+            entry = _custom_path_entry(row, fwd_custom, rev_custom)
+            manifest_samples_data[sample_id][replicate_from_meta].append(entry)
             continue
 
         sequencing_token_from_meta = tokenize(sequencing_id_from_meta)
@@ -406,9 +454,7 @@ def sra_flow(args):
 
     data_root = Path(config["data_root_directory"]).expanduser()
 
-    with open(f"{analysis_dir}/metadata.tsv", "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        rows = list(reader)
+    rows = load_metadata_rows(analysis_dir)
 
     for row in rows:
         sample_id = row["SampleId"]
@@ -417,6 +463,13 @@ def sra_flow(args):
         replicate_from_meta = row["Replicate"]
 
         if not sample_id or not sequencing_id_base or not replicate_from_meta:
+            continue
+
+        # Check for custom FASTQ paths first
+        fwd_custom, rev_custom = _validate_custom_paths(row)
+        if fwd_custom:
+            entry = _custom_path_entry(row, fwd_custom, rev_custom)
+            manifest_samples_data[sample_id][replicate_from_meta].append(entry)
             continue
 
         fwd_path_to_use = None
@@ -517,6 +570,7 @@ def flow_cli(args):
     else:
         print("Initiating BaseSpace mode manifest generation...")
         flow(args)  # Call the renamed BaseSpace function
+    generate_reference_matrix(analysis_dir, config)
 
 
 def concatenate_replicates_from_manifest_py(
@@ -585,10 +639,183 @@ def load_mlip_config():
         raise Exception("Could not load configuration file!")
 
 
+def _validate_metadata_for_flow(analysis_dir):
+    """Check if metadata is ready for the flow step. Returns (ok, message)."""
+    metadata_path = Path(f"{analysis_dir}/metadata.tsv")
+    if not metadata_path.exists():
+        return False, f"Metadata file not found at {metadata_path}"
+    try:
+        df = pd.read_csv(metadata_path, sep="\t", dtype=str).fillna("")
+        required_cols = ["SequencingId", "SampleId", "Replicate"]
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            return False, f"Metadata is missing required columns: {', '.join(missing)}"
+        if df.empty:
+            return False, "Metadata has headers but no data rows"
+        if df["SampleId"].eq("").any() or df["Replicate"].eq("").any():
+            return False, "Metadata has empty values in SampleId or Replicate columns"
+        return True, "Metadata is ready"
+    except Exception as e:
+        return False, f"Error reading metadata: {e}"
+
+
+def _dry_run_validate(config, analysis_dir, sra_mode):
+    """Validate everything without writing files. Returns True if all OK."""
+    print("\n--- Dry Run Validation ---")
+    all_ok = True
+
+    # Check metadata
+    metadata_ok, metadata_msg = _validate_metadata_for_flow(analysis_dir)
+    if metadata_ok:
+        print_status_item(metadata_msg, "success")
+    else:
+        print_status_item(metadata_msg, "error")
+        all_ok = False
+        return all_ok
+
+    rows = load_metadata_rows(analysis_dir)
+
+    # Validate custom FASTQ paths
+    custom_path_count = 0
+    scan_path_count = 0
+    for row in rows:
+        if not row["SampleId"].strip() or not row["Replicate"].strip():
+            continue
+        fwd = row.get("ForwardPath", "").strip()
+        rev = row.get("ReversePath", "").strip()
+        if fwd and rev:
+            custom_path_count += 1
+            fwd_path = Path(fwd).expanduser()
+            rev_path = Path(rev).expanduser()
+            if not fwd_path.exists():
+                print_status_item(f"ForwardPath does not exist: {fwd_path} (SequencingId: {row['SequencingId']})", "error")
+                all_ok = False
+            if not rev_path.exists():
+                print_status_item(f"ReversePath does not exist: {rev_path} (SequencingId: {row['SequencingId']})", "error")
+                all_ok = False
+        elif fwd or rev:
+            print_status_item(f"Only one of ForwardPath/ReversePath specified for {row['SequencingId']}", "error")
+            all_ok = False
+        else:
+            scan_path_count += 1
+
+    if custom_path_count > 0:
+        print_status_item(f"{custom_path_count} row(s) use custom FASTQ paths", "info")
+    if scan_path_count > 0:
+        print_status_item(f"{scan_path_count} row(s) will use {'SRA' if sra_mode else 'BaseSpace'} file scanning", "info")
+
+    # Check reference resolution
+    reference = config.get("reference", "")
+    if not reference:
+        print_status_item("No reference specified in config.yml", "error")
+        all_ok = False
+    elif reference.endswith(".zip"):
+        zip_path = Path(reference).expanduser()
+        if zip_path.exists():
+            print_status_item(f"Reference ZIP found: {zip_path}", "success")
+        else:
+            print_status_item(f"Reference ZIP not found: {zip_path}", "error")
+            all_ok = False
+    else:
+        ref_dict = load_reference_dictionary(reference)
+        if ref_dict:
+            print_status_item(f"Reference '{reference}' resolves to {len(ref_dict)} segments", "success")
+        else:
+            print_status_item(f"Reference '{reference}' not found in references.tsv", "error")
+            all_ok = False
+
+    # Validate VAPOR databases if enabled
+    if config.get("use_vapor", False) and not reference.endswith(".zip"):
+        ref_dict = load_reference_dictionary(reference)
+        segments = sorted(ref_dict.keys()) if ref_dict else []
+        if segments:
+            missing_dbs = []
+            for seg in segments:
+                db_path = Path(analysis_dir) / "reference" / seg / "all.fasta"
+                if not db_path.exists():
+                    missing_dbs.append(seg)
+            if missing_dbs:
+                print_status_item(f"VAPOR databases missing for: {', '.join(missing_dbs)}", "error")
+                all_ok = False
+            else:
+                print_status_item("VAPOR databases found for all segments", "success")
+
+    # Summary
+    sample_ids = sorted(set(row["SampleId"] for row in rows if row["SampleId"].strip()))
+    neg_controls = get_negative_control_samples(analysis_dir)
+    analysis_samples = [s for s in sample_ids if s not in neg_controls]
+
+    print(f"\n  Samples: {len(sample_ids)} total ({len(analysis_samples)} analysis, {len(neg_controls)} negative controls)")
+
+    if all_ok:
+        print("\n  Dry run passed. Run without --dry-run to write manifest and reference matrix.")
+    else:
+        print("\n  Dry run found issues. Please fix the errors above before proceeding.")
+    return all_ok
+
+
+def configure_cli(args):
+    """Unified configure command that walks through check -> preprocess -> flow."""
+    print("\n=====================================================")
+    print(" MLIP Pipeline Configuration")
+    print("=====================================================")
+
+    # Step 1: Environment + config check
+    print("\n--- Step 1: Environment & Configuration Check ---")
+    all_checks_clear = report_pipeline_status()
+
+    if not all_checks_clear:
+        print("\nConfiguration issues detected. Please fix the errors above before proceeding.")
+        return
+
+    config = load_mlip_config()
+    analysis_dir = config.get('analysis', '')
+
+    # Step 2: Preprocess if -f flag provided
+    if hasattr(args, 'file') and args.file:
+        print(f"\n--- Step 2: Creating metadata from {args.file} ---")
+        if args.key:
+            preprocess(args.file, args.key)
+        else:
+            preprocess(args.file)
+        print("\nMetadata template created. Please edit it, then run configure again.")
+        return
+
+    # Step 3: Check metadata readiness
+    metadata_ok, metadata_msg = _validate_metadata_for_flow(analysis_dir)
+    if not metadata_ok:
+        print(f"\n--- Metadata not ready: {metadata_msg} ---")
+        print("To create metadata from sequencing IDs:")
+        print(f"  python mlip/dataflow.py configure -f <id_file>")
+        print("Or manually place a completed metadata.tsv in your analysis directory.")
+        return
+
+    print(f"\n  Metadata is ready at {analysis_dir}/metadata.tsv")
+
+    # Step 4: Dry run or actual flow
+    sra_mode = getattr(args, 'sra_mode', False)
+
+    if getattr(args, 'dry_run', False):
+        _dry_run_validate(config, analysis_dir, sra_mode)
+        return
+
+    print(f"\n--- Step 3: Generating manifest and reference matrix ---")
+    _prepare_reference_from_zip_if_needed(config, analysis_dir)
+
+    if sra_mode:
+        print("  Mode: SRA/Generic")
+        sra_flow(args)
+    else:
+        print("  Mode: BaseSpace")
+        flow(args)
+
+    generate_reference_matrix(analysis_dir, config)
+    print("\nConfiguration complete. You are ready to run Snakemake.")
+
+
 def command_line_interface():
     # --- Main Parser Setup ---
     parser = argparse.ArgumentParser(
-        # Description appears at the top, explaining the script's overall purpose.
         description=(
             "=====================================================\n"
             " MLIP Dataflow & Setup Tool\n"
@@ -597,104 +824,134 @@ def command_line_interface():
             "this viral deep sequencing pipeline. It helps you:\n"
             "  - Check your environment and configuration.\n"
             "  - Create a metadata file from sequencing IDs.\n"
-            "  - Arrange your FASTQ files for ingestion by the pipeline."
+            "  - Arrange your FASTQ files for ingestion by the pipeline.\n\n"
+            "The recommended command is `configure`, which walks through\n"
+            "all setup steps automatically."
         ),
-        # Epilog appears at the very bottom, after all arguments.
         epilog=(
             "-----------------------------------------------------\n"
-            "Typical Workflow Steps:\n"
-            " 1. `check`: Verify your setup (run this as much as you want!).\n"
-            "    Usage: python mlip/dataflow.py check\n"
-            " 2. `preprocess`: Create metadata sheet from sequence IDs.\n"
-            "    Usage: python mlip/dataflow.py preprocess -f <id_file>\n"
-            " 3. *Manually Edit* the generated `data/metadata.tsv`.\n"
-            " 4. `flow`: Move FASTQ files based on completed metadata.\n"
-            "    Usage: python mlip/dataflow.py flow\n\n"
-            "For detailed help on any command and its specific options:\n"
-            "  python mlip/dataflow.py <command> -h \n"
-            "e.g.:\n"
-            "  python mlip/dataflow.py preprocess -h\n"
+            "Recommended Workflow:\n"
+            " 1. Edit `config.yml` with your analysis name and reference.\n"
+            " 2. `configure -f ids.txt`: Check environment + create metadata.\n"
+            " 3. *Manually edit* the generated metadata.tsv.\n"
+            " 4. `configure`: Check environment + generate manifest + matrix.\n"
+            " 5. `configure --dry-run`: Validate without writing (optional).\n\n"
+            "Legacy commands (check, preprocess, flow) are still available.\n"
             "-----------------------------------------------------"
         ),
-        # This formatter preserves your line breaks in description and epilog.
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # --- Subparsers Setup ---
-    # Give the group of commands a title and description
     subparsers = parser.add_subparsers(
-        dest="command",  # Stores the chosen command name
-        required=True,  # A command MUST be provided
+        dest="command",
+        required=True,
         title="Available Commands",
         description="Choose one of the following commands to perform a specific task:",
-        metavar="<command>",  # How the placeholder appears in the usage line
+        metavar="<command>",
     )
 
-    # --- Check Subcommand Parser ---
+    # --- Configure Subcommand Parser (primary command) ---
+    configure_parser = subparsers.add_parser(
+        "configure",
+        help="Setup the pipeline (checks environment, creates metadata, generates manifest).",
+        description=(
+            "Unified pipeline configuration command.\n\n"
+            "Walks through all setup steps in order:\n"
+            "  1. Check environment (tools, packages, config.yml)\n"
+            "  2. If -f provided: create metadata template from IDs file\n"
+            "  3. If metadata is ready: generate file manifest + reference matrix\n\n"
+            "Run this command repeatedly as you progress through setup.\n"
+            "Each invocation detects your current state and does the right thing."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  python mlip/dataflow.py configure              # check + flow (if metadata ready)\n"
+            "  python mlip/dataflow.py configure -f ids.txt   # check + create metadata template\n"
+            "  python mlip/dataflow.py configure --dry-run    # validate without writing\n"
+            "  python mlip/dataflow.py configure --sra-mode   # SRA naming convention\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    configure_parser.add_argument(
+        "-f", "--file",
+        required=False,
+        type=str,
+        default=None,
+        metavar="<path/to/id_list.txt>",
+        help="Path to text file with sequencing IDs (one per line). Creates metadata template.",
+    )
+    configure_parser.add_argument(
+        "-k", "--key",
+        required=False,
+        type=str,
+        default="Seq",
+        metavar="<key>",
+        help="Keyword pattern for sample ID extraction (default: 'Seq').",
+    )
+    configure_parser.add_argument(
+        "--sra-mode",
+        action="store_true",
+        help="Use SRA/generic naming convention instead of BaseSpace.",
+    )
+    configure_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate metadata, FASTQs, and references without writing manifest or matrix.",
+    )
+    configure_parser.set_defaults(func=configure_cli)
+
+    # --- Legacy: Check Subcommand Parser ---
     check_parser = subparsers.add_parser(
         "check",
-        help="✅ Verify environment, config, and data setup status.",  # Concise help for the list
-        description=(  # More detailed help shown with 'check -h'
+        help="Verify environment, config, and data setup status.",
+        description=(
             "Performs checks on your MLIP setup:\n"
             " - Verifies required software and Python packages are installed.\n"
             " - Checks if `config.yml` exists and is valid.\n"
-            " - Looks for `data/metadata.tsv` and assesses its status.\n"
-            " - Checks if data appears to have been moved by the `flow` command.\n"
+            " - Looks for metadata.tsv and assesses its status.\n"
             "Run this first or if you encounter problems."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    check_parser.set_defaults(
-        func=check_cli
-    )  # No arguments specific to 'check' needed yet
+    check_parser.set_defaults(func=check_cli)
 
-    # --- Preprocess Subcommand Parser ---
+    # --- Legacy: Preprocess Subcommand Parser ---
     pre_parser = subparsers.add_parser(
         "preprocess",
-        help="📄 Create initial metadata sheet from sequencing IDs.",
-        description=(  # More detailed help shown with 'preprocess -h'
-            "Reads a simple text file containing one Sequencing ID per line \n"
-            "(e.g., 'SampleA_Seq1', matching your FASTQ file names from BaseSpace/SRA).\n"
-            "It automatically creates a template spreadsheet at `data/metadata.tsv`,\n"
-            "attempting to guess 'SampleId' based on common patterns.\n\n"
-            "--> IMPORTANT: You MUST manually open and edit `data/metadata.tsv` \n"
-            "    after running this command to verify/correct 'SampleId' and \n"
-            "    fill in the 'Replicate' column before running the `flow` command."
+        help="Create initial metadata sheet from sequencing IDs.",
+        description=(
+            "Reads a text file with one Sequencing ID per line and creates\n"
+            "a template metadata.tsv. You MUST manually edit it afterward.\n\n"
+            "Consider using `configure -f <id_file>` instead."
         ),
         epilog="Example: python mlip/dataflow.py preprocess -f ./my_sequence_ids.txt",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     pre_parser.add_argument(
-        "-f",
-        "--file",
+        "-f", "--file",
         required=True,
         type=str,
-        metavar="<path/to/id_list.txt>",  # More descriptive placeholder
+        metavar="<path/to/id_list.txt>",
         help="REQUIRED: Path to the input text file containing Sequencing IDs (one per line).",
     )
     pre_parser.add_argument(
-        "-k",
-        "--key",
+        "-k", "--key",
         required=False,
         type=str,
         default="Seq",
         metavar="<key>",
-        help="Keyword in Sequencing ID that denotes the sequencing run (default: 'Seq'). Used for auto-generating SampleId (e.g., 'SampleA_Seq1' -> SampleId 'SampleA').",
+        help="Keyword in Sequencing ID that denotes the sequencing run (default: 'Seq').",
     )
     pre_parser.set_defaults(func=preprocess_cli)
 
-    # --- Flow Subcommand Parser ---
+    # --- Legacy: Flow Subcommand Parser ---
     flow_parser = subparsers.add_parser(
         "flow",
-        help="🚚 Move FASTQ files based on the completed metadata sheet.",
-        description=(  # More detailed help shown with 'flow -h'
-            "Reads your completed `data/metadata.tsv` spreadsheet AND your `config.yml` file.\n"
-            "It finds the corresponding FASTQ files (R1/R2 pairs) within the \n"
-            "`data_root_directory` specified in your config, and copies them into \n"
-            "an organized structure within the `data/` directory (e.g., data/SampleA/sequencing-1/).\n"
-            "This prepares the data for the main Snakemake pipeline.\n\n"
-            "--> Ensure `config.yml` points to the correct `data_root_directory` \n"
-            "    and `data/metadata.tsv` is fully edited and saved before running."
+        help="Generate file manifest from completed metadata sheet.",
+        description=(
+            "Reads your completed metadata.tsv and config.yml, finds FASTQ files,\n"
+            "and generates file_manifest.json + reference_matrix.tsv.\n\n"
+            "Consider using `configure` instead."
         ),
         epilog="Example: python mlip/dataflow.py flow",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -705,22 +962,15 @@ def command_line_interface():
     flow_parser.set_defaults(func=flow_cli)
 
     # --- Argument Parsing ---
-    # If the script is called with no arguments other than the script name itself
-    # (e.g., "python3 mlip/dataflow.py" with nothing after it)
-    if len(sys.argv) == 1:  # sys.argv[0] is the script name
-        parser.print_help()  # Display the full help message
-        sys.exit(0)  # Exit gracefully
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
 
-    # Only parse args if the script is run directly (standard practice)
     if __name__ == "__main__":
         args = parser.parse_args()
-        # Execute the function associated with the chosen subcommand
         if hasattr(args, "func"):
             args.func(args)
         else:
-            # Should not happen if 'required=True' is set for subparsers,
-            # but good practice to handle case where no command is given
-            # if required=False were used.
             parser.print_help()
 
 
@@ -762,11 +1012,11 @@ def check_cli(args):
         print(
             "   Please review any ℹ️ informational or ⚠️ warning messages above for further context."
         )
-        print("   If you haven't already, run the following command:.")
+        print("   If you haven't already, run the following command:")
         print("")
-        print("      python mlip/dataflow.py flow")
+        print("      python mlip/dataflow.py configure")
         print("")
-        print("   to move data out of your data root directory and into the pipeline.")
+        print("   to generate the file manifest and reference matrix.")
         print("   You should then be ready to run Snakemake commands.")
     else:
         print(
@@ -1012,13 +1262,28 @@ def report_pipeline_status():
                         print_status_item(
                             f"`{analysis_dir}/metadata.tsv` appears populated.", "success"
                         )
+                    # Check for optional new columns (informational only)
+                    optional_cols = ["NegativeControl", "ForwardPath", "ReversePath"]
+                    present_optional = [c for c in optional_cols if c in df.columns]
+                    missing_optional = [c for c in optional_cols if c not in df.columns]
+                    if present_optional:
+                        print_status_item(
+                            f"Extended columns present: {', '.join(present_optional)}.", "info"
+                        )
+                    if missing_optional:
+                        print_status_item(
+                            f"Extended columns not present (optional): {', '.join(missing_optional)}.", "info"
+                        )
+                        print_guidance(
+                            "These columns are optional. Use `configure -f` to generate metadata with all columns."
+                        )
         except pd.errors.EmptyDataError:
             print_status_item(
                 f"`{analysis_dir}/metadata.tsv` exists but is completely empty (cannot be parsed).",
                 "error",
             )
             print_guidance(
-                "Run `python mlip/dataflow.py preprocess -h` and follow instructions therein."
+                "Run `python mlip/dataflow.py configure -f <id_file>` to create metadata."
             )
             overall_status_ok = False
         except Exception as e:
@@ -1026,6 +1291,47 @@ def report_pipeline_status():
                 f"Error reading or parsing `{analysis_dir}/metadata.tsv`: {e}", "error"
             )
             overall_status_ok = False
+
+    # --- 4. Reference Matrix ---
+    if analysis_dir:
+        print_section_header(f"4. Reference Matrix (`{analysis_dir}/reference_matrix.tsv`)")
+        matrix_path = Path(analysis_dir) / "reference_matrix.tsv"
+        if matrix_path.exists():
+            print_status_item(f"`reference_matrix.tsv` found.", "success")
+        else:
+            print_status_item(
+                f"`reference_matrix.tsv` not found.", "info"
+            )
+            print_guidance(
+                "This file is generated by `configure` or `flow`. Run one of these commands."
+            )
+
+    # --- 5. VAPOR Database Status ---
+    if config and config.get("use_vapor", False) and analysis_dir:
+        is_zip_ref = str(config.get("reference", "")).endswith(".zip")
+        print_section_header("5. VAPOR Database Status")
+        if is_zip_ref:
+            print_status_item("VAPOR is enabled but reference is a ZIP file. VAPOR requires named references.", "warning")
+        else:
+            ref_dict = load_reference_dictionary(str(config.get("reference", "")))
+            segments = sorted(ref_dict.keys()) if ref_dict else []
+            if segments:
+                missing_dbs = []
+                found_dbs = []
+                for seg in segments:
+                    db_path = Path(analysis_dir) / "reference" / seg / "all.fasta"
+                    if db_path.exists():
+                        found_dbs.append(seg)
+                    else:
+                        missing_dbs.append(seg)
+                if found_dbs:
+                    print_status_item(f"VAPOR databases found for: {', '.join(found_dbs)}", "success")
+                if missing_dbs:
+                    print_status_item(f"VAPOR databases missing for: {', '.join(missing_dbs)}", "error")
+                    print_guidance(f"Expected: {analysis_dir}/reference/{{segment}}/all.fasta")
+                    overall_status_ok = False
+            else:
+                print_status_item("Cannot check VAPOR databases: no segments resolved from reference.", "warning")
 
     return overall_status_ok
 
@@ -1042,6 +1348,101 @@ def load_metadata_dictionary(analysis_dir):
         md_dict[sample_id][replicate].append(counter[sample_id])
     f.close()
     return md_dict
+
+
+def load_metadata_rows(analysis_dir):
+    """Load metadata as a list of row dicts, backward-compatible with old formats."""
+    with open(f"{analysis_dir}/metadata.tsv", "r") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        rows = []
+        for row in reader:
+            # Ensure new columns exist with empty defaults for old metadata files
+            row.setdefault("NegativeControl", "")
+            row.setdefault("ForwardPath", "")
+            row.setdefault("ReversePath", "")
+            rows.append(row)
+    return rows
+
+
+def get_negative_control_samples(analysis_dir):
+    """Return set of SampleIds marked as negative controls.
+
+    Treats empty string and case-insensitive 'no' as non-control.
+    Any other non-empty value (e.g. 'yes', 'water', 'blank') means control.
+    """
+    rows = load_metadata_rows(analysis_dir)
+    controls = set()
+    for row in rows:
+        val = row.get("NegativeControl", "").strip().lower()
+        if val and val != "no":
+            controls.add(row["SampleId"])
+    return controls
+
+
+def generate_reference_matrix(analysis_dir, config):
+    """Generate reference_matrix.tsv mapping each sample to per-segment accessions.
+
+    Generates the matrix with default accessions from references.tsv.
+    When use_vapor is enabled, VAPOR may override these defaults at runtime
+    via Snakemake rules that select closer references per sample/segment.
+
+    Format:
+        SampleId\tha\tna\tpb1\t...
+        sample1\tAF144305.1\tAF144304.1\tAF144301.1\t...
+    """
+    rows = load_metadata_rows(analysis_dir)
+    sample_ids = sorted(set(row["SampleId"] for row in rows if row["SampleId"].strip()))
+
+    if not sample_ids:
+        print("WARNING: No samples found in metadata for reference matrix generation.")
+        return
+
+    reference = config.get("reference", "")
+    using_zip = reference.endswith(".zip")
+
+    if using_zip:
+        ref_dir = Path(analysis_dir) / "reference"
+        if not ref_dir.is_dir():
+            print("WARNING: Reference directory not found, skipping matrix generation.")
+            return
+        segments = sorted([
+            p.name for p in ref_dir.iterdir()
+            if p.is_dir() and not p.name.startswith(".")
+        ])
+        accession_map = {seg: seg for seg in segments}
+    else:
+        ref_dict = load_reference_dictionary(reference)
+        if not ref_dict:
+            print(f"WARNING: Reference '{reference}' not found in references.tsv, skipping matrix generation.")
+            return
+        segments = sorted(ref_dict.keys())
+        accession_map = {seg: ref_dict[seg]["genbank_accession"] for seg in segments}
+
+    matrix_path = Path(analysis_dir) / "reference_matrix.tsv"
+    with open(matrix_path, "w", newline="") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow(["SampleId"] + segments)
+        for sample_id in sample_ids:
+            writer.writerow([sample_id] + [accession_map[seg] for seg in segments])
+
+    print(f"Reference matrix written to {matrix_path} ({len(sample_ids)} samples, {len(segments)} segments).")
+
+
+def load_reference_matrix(analysis_dir):
+    """Load reference_matrix.tsv into a dict of {sample_id: {segment: accession}}.
+
+    Returns empty dict if the file doesn't exist (backward-compatible).
+    """
+    matrix_path = Path(analysis_dir) / "reference_matrix.tsv"
+    if not matrix_path.exists():
+        return {}
+    matrix = {}
+    with open(matrix_path, "r") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            sample_id = row["SampleId"]
+            matrix[sample_id] = {k: v for k, v in row.items() if k != "SampleId"}
+    return matrix
 
 
 def samples_to_analyze(analysis_dir):
@@ -1308,9 +1709,13 @@ def extract_cds_with_coords(genbank_file, consensus_record):
     return cds_data
 
 
-def extract_coding_regions(segments, replicate_consensus_fasta, analysis_dir):
+def extract_coding_regions(segments, replicate_consensus_fasta, analysis_dir, genbank_paths=None):
     """
     Loads consensus sequences and orchestrates CDS extraction for each segment.
+
+    Args:
+        genbank_paths: Optional dict of {segment: genbank_filepath} for per-sample references.
+                       Falls back to {analysis_dir}/reference/{segment}/metadata.gb if not provided.
     """
     # Load all consensus sequences into a dictionary for quick access
     consensus_sequences = SeqIO.to_dict(SeqIO.parse(replicate_consensus_fasta, "fasta"))
@@ -1319,7 +1724,10 @@ def extract_coding_regions(segments, replicate_consensus_fasta, analysis_dir):
     for segment in segments:
         # Proceed only if the segment exists in the consensus file
         if segment in consensus_sequences:
-            genbank_filepath = f"{analysis_dir}/reference/{segment}/metadata.gb"
+            if genbank_paths and segment in genbank_paths:
+                genbank_filepath = genbank_paths[segment]
+            else:
+                genbank_filepath = f"{analysis_dir}/reference/{segment}/metadata.gb"
             # Pass the specific consensus sequence record to the extraction function
             consensus_record = consensus_sequences[segment]
             coding_regions[segment] = extract_cds_with_coords(genbank_filepath, consensus_record)
@@ -1327,12 +1735,14 @@ def extract_coding_regions(segments, replicate_consensus_fasta, analysis_dir):
     return coding_regions
 
 
-def extract_coding_regions_io(segments, replicate_consensus_fasta, output_json, analysis_dir):
+def extract_coding_regions_io(segments, replicate_consensus_fasta, output_json, analysis_dir, genbank_paths=None):
     """
     I/O wrapper for extracting coding regions for a replicate.
     """
     with open(output_json, "w") as json_file:
-        coding_regions = extract_coding_regions(segments, replicate_consensus_fasta, analysis_dir)
+        coding_regions = extract_coding_regions(
+            segments, replicate_consensus_fasta, analysis_dir, genbank_paths=genbank_paths
+        )
         json.dump(coding_regions, json_file)
 
 
@@ -1796,7 +2206,7 @@ def call_sample_consensus(input_replicates, output_sample):
     SeqIO.write(output_records, output_sample, "fasta")
 
 
-def translate_consensus_genes(consensus_fasta, output_dir, sample, analysis_dir):
+def translate_consensus_genes(consensus_fasta, output_dir, sample, analysis_dir, genbank_paths=None):
     """
     For each consensus record (whose id corresponds to a segment/genbank file),
     translate each CDS gene using the consensus sequence (aligned to the GenBank).
@@ -1811,6 +2221,9 @@ def translate_consensus_genes(consensus_fasta, output_dir, sample, analysis_dir)
           Sample name for the protein records.
       analysis_dir : str
           Analysis directory containing the reference GenBank files.
+      genbank_paths : dict, optional
+          Dict of {segment: genbank_filepath} for per-sample references.
+          Falls back to {analysis_dir}/reference/{segment}/metadata.gb if not provided.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -1818,7 +2231,10 @@ def translate_consensus_genes(consensus_fasta, output_dir, sample, analysis_dir)
     consensus_dict = SeqIO.to_dict(SeqIO.parse(consensus_fasta, "fasta"))
 
     for seg_id, consensus_record in consensus_dict.items():
-        gb_file = os.path.join(analysis_dir, "reference", seg_id, "metadata.gb")
+        if genbank_paths and seg_id in genbank_paths:
+            gb_file = genbank_paths[seg_id]
+        else:
+            gb_file = os.path.join(analysis_dir, "reference", seg_id, "metadata.gb")
         try:
             gb_record = SeqIO.read(gb_file, "genbank")
         except Exception as e:
@@ -1975,6 +2391,97 @@ def aggregate_consensus_summaries_io(input_files, output_file):
 
     # Write output
     combined_df.to_csv(output_file, sep="\t", index=False)
+
+
+def collect_segment_references_py(default_fasta, sample_ref_fastas, samples,
+                                   segment, output_fasta, output_mapping):
+    records = []
+    sample_to_representative = {}
+    seen_sequences = {}
+
+    # Add default reference as anchor
+    for record in SeqIO.parse(default_fasta, "fasta"):
+        records.append(SeqRecord(record.seq, id="default", description=""))
+        seen_sequences[str(record.seq).upper()] = "default"
+        break
+
+    # Add unique per-sample references
+    for sample, ref_fasta in zip(samples, sample_ref_fastas):
+        found = False
+        for record in SeqIO.parse(ref_fasta, "fasta"):
+            if record.id == segment:
+                seq_str = str(record.seq).upper()
+                if seq_str in seen_sequences:
+                    sample_to_representative[sample] = seen_sequences[seq_str]
+                else:
+                    seen_sequences[seq_str] = sample
+                    sample_to_representative[sample] = sample
+                    records.append(SeqRecord(record.seq, id=sample, description=""))
+                found = True
+                break
+        if not found:
+            sample_to_representative[sample] = "default"
+
+    os.makedirs(os.path.dirname(output_fasta), exist_ok=True)
+    SeqIO.write(records, output_fasta, "fasta")
+    with open(output_mapping, 'w') as f:
+        json.dump(sample_to_representative, f, indent=2)
+
+
+def build_coordinate_map(aligned_record):
+    """Map 1-based ungapped position to 1-based alignment column for one sequence."""
+    coord_map = {}
+    ungapped_pos = 0
+    for col_idx, base in enumerate(str(aligned_record.seq)):
+        if base != '-':
+            ungapped_pos += 1
+            coord_map[ungapped_pos] = col_idx + 1
+    return coord_map
+
+
+def build_all_coordinate_maps(alignment_fasta):
+    """Parse MSA FASTA, return {seq_id: {local_pos: global_col}} for all sequences."""
+    maps = {}
+    for record in SeqIO.parse(alignment_fasta, "fasta"):
+        maps[record.id] = build_coordinate_map(record)
+    return maps
+
+
+def harmonize_variant_positions(variants_tsv, segment_alignment_paths,
+                                 segment_mapping_paths, output_tsv):
+    df = pd.read_csv(variants_tsv, sep='\t')
+    if df.empty:
+        df['global_position'] = pd.Series(dtype='Int64')
+        df.to_csv(output_tsv, sep='\t', index=False)
+        return
+
+    # Pre-load coordinate maps and sample mappings for all segments
+    coord_maps = {}
+    sample_maps = {}
+    for segment, aln_path in segment_alignment_paths.items():
+        coord_maps[segment] = build_all_coordinate_maps(aln_path)
+        with open(segment_mapping_paths[segment]) as f:
+            sample_maps[segment] = json.load(f)
+
+    # Map each variant's local position to global alignment position
+    global_positions = []
+    for _, row in df.iterrows():
+        segment = row['segment']
+        sample = row['sample']
+        local_pos = int(row['position'])
+
+        representative = sample_maps.get(segment, {}).get(sample, 'default')
+        sample_coord_map = coord_maps.get(segment, {}).get(
+            representative, coord_maps.get(segment, {}).get('default')
+        )
+
+        if sample_coord_map and local_pos in sample_coord_map:
+            global_positions.append(sample_coord_map[local_pos])
+        else:
+            global_positions.append(pd.NA)
+
+    df['global_position'] = global_positions
+    df.to_csv(output_tsv, sep='\t', index=False)
 
 
 if __name__ == "__main__":
