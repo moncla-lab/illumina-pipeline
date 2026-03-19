@@ -25,33 +25,37 @@ Suppose you have several FASTQs downloaded to a folder that you'd like to analyz
 Get a copy of the code and set up your environment for analysis:
 
 ```
-git clone https://github.com/moncla-lab/illumina-pipeline MyAnalysis
-cd MyAnalysis
+git clone https://github.com/moncla-lab/illumina-pipeline
+cd illumina-pipeline
 conda activate mlip
 ```
 
 There are three main concerns when configuring the pipeline to run:
 
-- copying and editing the **configuration** template, and pointing it towards existing data 
+- initializing an analysis with a **configuration** file
 - choosing a **reference**, either in the configuration, in the references table, or by using a custom one
 - generating and filling in an appropriate **metadata** spreadsheet
 
-The user is encouraged to **repeatedly** run
+#### Initialize your analysis
+
+First, create a text file with your sequencing experiment IDs (one per line). Then run **preprocess** to initialize your analysis:
 
 ```
-python mlip/dataflow.py check
+python mlip/dataflow.py preprocess -f /path/to/sequencingExperimentIDs.txt --analysis MyAnalysis
 ```
 
-to receive feedback on where they are in the configuration process.
+This creates:
+
+- `MyAnalysis/config.yml` - Configuration file for this analysis
+- `MyAnalysis/metadata.tsv` - Metadata spreadsheet to edit
 
 #### Configuration file
 
-Edit `config.yml` with appropriate values. For a first run, you'll likely need to adjust:
-- `analysis`: Name for your analysis (also becomes the output directory name)
-- `reference`: Reference key from `references.tsv` or path to custom reference ZIP
-- `data_root_directory`: Where BaseSpace/SRA data was downloaded
+Edit `MyAnalysis/config.yml` with appropriate values. For a first run, you'll likely need to adjust:
 
-Note: `config.yml` will be copied into your output directory for record-keeping.
+- `data_root_directory`: Path where you downloaded data from the BaseSpace downloader
+- `reference`: Reference key from `references.tsv` or path to custom reference ZIP
+- Coverage thresholds if needed
 
 For a complete list of configuration options, see [Configuration documentation](./DOCUMENTATION.md#2-configuration).
 
@@ -60,12 +64,7 @@ We have [predefined references](./references.tsv). The simplest use case is to c
 
 #### Metadata
 
-To move data out of the data folder and into this pipeline, a text file of sequencing experiment IDs corresponding to each FASTQ dataset, one per line, must be created at a known path we'll call `/path/to/fastqDatasetIDs.txt`. Note we say FASTQ dataset as this is technically a pair of FASTQ files. It's best to pull these from either BaseSpace sample sheet CSVs or SRA accessions.
-
-The first **preprocess** step looks at these IDs and builds a metadata spreadsheet at `{analysis}/metadata.tsv` (where `{analysis}` is the name specified in `config.yml`):
-```
-python mlip/dataflow.py preprocess -f /path/to/sequencingExperimentIDs.txt
-```
+The **preprocess** step above created a metadata spreadsheet at `MyAnalysis/metadata.tsv`.
 
 The pipeline will do its best to assign sample IDs to each sequencing experiment ID. The user should open the metadata file above, inspect that these sample IDs were correctly assigned, assign any that are missing, and assign a replicate to each sequencing experiment ID.
 
@@ -89,15 +88,20 @@ while a completed metadata sheet will look like:
 | rf_Seq2      | rf       | 2         |
 | rf_Seq3      | rf       | 1         |
 
-For emphasis, the `check` step above will attempt to give feedback at any step of the configuration.
+#### Configure and validate
 
-Once the metadata spreadsheet is fully populated, the following command moves data into the pipeline in an organized manner for further analysis.
+Once the metadata spreadsheet is fully populated and you've edited the config, run **configure** to validate your setup and prepare data for the pipeline:
 
 ```
-python mlip/dataflow.py flow
+python mlip/dataflow.py configure
 ```
 
-Note that the default mode for the above command is to handle BaseSpace data, and there is an SRA mode that uses the `--sra-mode` flag.
+This command:
+1. Validates your configuration and metadata
+2. If all checks pass, automatically prepares data for the pipeline
+3. Reports any issues that need to be fixed
+
+Note: For SRA data instead of BaseSpace, use `--sra-mode` flag.
 
 ### Run the pipeline
 
@@ -106,7 +110,7 @@ With data situated, the pipeline can be ran as:
 snakemake -j $NUMBER_OF_JOBS all
 ```
 
-$NUMBER_OF_JOBS should be at least 1, and no more than the number of cores on your computer. After this, your analysis output directory (named per the `analysis` parameter in `config.yml`) should be filled with lots of files of various formats, many which contain relevant virological information.
+`$NUMBER\_OF\_JOBS` should be at least 1, and no more than the number of cores on your computer. After this, your analysis output directory (named per the `analysis` parameter in `config.yml`) should be filled with lots of files of various formats, many which contain relevant virological information.
 
 **Important**: Always review the consensus remapping differences report (`consensus_summary_report.tsv`) after running the pipeline to identify positions where consensus sequences changed between remapping iterations, which indicates potential mapping inconsistencies that should be investigated. When this occurs, consult the [additional documentation](DOCUMENTATION.md#check_consensus_summary).
 

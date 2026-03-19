@@ -192,53 +192,93 @@ def check_duplicates(lines):
         sys.exit(1)
 
 
-def preprocess(id_filepath, seq_key="Seq"):
+def preprocess(id_filepath, analysis_name, seq_key="Seq"):
+    """
+    Initialize a new analysis by creating config and metadata files.
+
+    Parameters:
+        id_filepath: Path to text file with sequencing IDs (one per line)
+        analysis_name: Name of the analysis (becomes directory name)
+        seq_key: Pattern keyword for parsing sample IDs (default: "Seq")
+    """
+    # Validate sequencing IDs
     with open(id_filepath, "r") as f:
         lines = f.read().splitlines()
     check_duplicates(lines)
 
-    # Load config to get analysis directory
-    config = load_mlip_config()
-    analysis_dir = config.get('analysis', '')
-    if not analysis_dir:
-        print("ERROR: 'analysis' key not found in config.yml.")
-        print("Please add an analysis name to your config.yml.")
+    analysis_dir = analysis_name
+
+    # Check if analysis directory already exists
+    if os.path.exists(analysis_dir):
+        existing_config = os.path.exists(f"{analysis_dir}/config.yml")
+        existing_metadata = os.path.exists(f"{analysis_dir}/metadata.tsv")
+        if existing_config or existing_metadata:
+            print(f"WARNING: Analysis directory '{analysis_dir}' already exists.")
+            print(f"  - config.yml exists: {existing_config}")
+            print(f"  - metadata.tsv exists: {existing_metadata}")
+            response = input("Overwrite? (y/N): ").strip().lower()
+            if response != 'y':
+                print("Aborted.")
+                sys.exit(0)
+
+    # Create analysis directory
+    os.makedirs(analysis_dir, exist_ok=True)
+
+    # Copy and populate config from template
+    template_path = "config.yml"
+    config_path = f"{analysis_dir}/config.yml"
+
+    if not os.path.exists(template_path):
+        print(f"ERROR: Config template not found at '{template_path}'.")
         sys.exit(1)
 
+    # Load template as YAML, modify, and write back
+    with open(template_path, "r") as f:
+        config_data = yaml.safe_load(f)
+
+    config_data['analysis'] = analysis_name
+
+    with open(config_path, "w") as f:
+        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+
+    print(f"✅ Config created: {config_path}")
+    print(f"   - analysis: {analysis_name}")
+
+    # Create metadata spreadsheet
     sorted_seq_ids = sorted(lines, key=lambda x: x.lower())
     seq_key_pattern = re.compile(rf"_{seq_key}(\d+)", re.IGNORECASE)
-    key_hash = {}
 
     fieldnames = ["SequencingId", "SampleId", "Replicate", "ForwardFastqPath", "ReverseFastqPath"]
-    os.makedirs(analysis_dir, exist_ok=True)
-    f = open(f"{analysis_dir}/metadata.tsv", "w", newline="")
-    writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
-    writer.writeheader()
-    # process keys
-    for seq_id in sorted_seq_ids:
-        match = seq_key_pattern.search(seq_id)
-        found_match = False
-        if match:
-            sample_id = seq_id.replace(match.group(0), "").lower()
-            found_match = True
-        else:
-            sample_id = ""
-        writer.writerow(
-            {"SequencingId": seq_id, "SampleId": sample_id, "Replicate": "",
-             "ForwardFastqPath": "", "ReverseFastqPath": ""}
-        )
+    metadata_path = f"{analysis_dir}/metadata.tsv"
+    with open(metadata_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for seq_id in sorted_seq_ids:
+            match = seq_key_pattern.search(seq_id)
+            if match:
+                sample_id = seq_id.replace(match.group(0), "").lower()
+            else:
+                sample_id = ""
+            writer.writerow(
+                {"SequencingId": seq_id, "SampleId": sample_id, "Replicate": "",
+                 "ForwardFastqPath": "", "ReverseFastqPath": ""}
+            )
 
-    f.close()
-    print(f"Metadata spreadsheet written to {analysis_dir}/metadata.tsv.")
-    print("Please edit, then run the flow step.")
+    print(f"✅ Metadata created: {metadata_path}")
+    print("")
+    print("Next steps:")
+    print(f"  1. Edit {config_path} (set reference and data_root_directory)")
+    print(f"  2. Edit {metadata_path} (fill in SampleId, Replicate columns)")
+    print(f"  3. Run: python mlip/dataflow.py configure")
     return
 
 
 def preprocess_cli(args):
-    if args.key:
-        preprocess(args.file, args.key)
-    else:
-        preprocess(args.file)
+    preprocess(
+        id_filepath=args.file,
+        analysis_name=args.analysis,
+        seq_key=args.key
+    )
 
 
 def tokenize(identifier):
@@ -388,6 +428,7 @@ def flow(args):
     os.makedirs(analysis_dir, exist_ok=True)
     with open(f"{analysis_dir}/file_manifest.json", "w") as f_out:
         json.dump(final_manifest, f_out, indent=2)
+    print(f"File manifest generated at {analysis_dir}/file_manifest.json.")
 
 
 def fastq_is_low_coverage_sra_generic(filepath_str, min_reads=50):
@@ -524,21 +565,6 @@ def _prepare_reference_from_zip_if_needed(config, analysis_dir):
     marker.touch()
 
 
-def flow_cli(args):
-    config = load_mlip_config()
-    analysis_dir = config.get('analysis', '')
-    if not analysis_dir:
-        print("ERROR: 'analysis' key not found in config.yml.")
-        sys.exit(1)
-    _prepare_reference_from_zip_if_needed(config, analysis_dir)
-    if args.sra_mode:
-        print("Initiating SRA/Generic mode manifest generation...")
-        sra_flow(args)
-    else:
-        print("Initiating BaseSpace mode manifest generation...")
-        flow(args)  # Call the renamed BaseSpace function
-
-
 def concatenate_replicates_from_manifest_py(
     manifest_filepath,
     sample_id,
@@ -590,98 +616,93 @@ def concatenate_replicates_from_manifest_py(
                     shutil.copyfileobj(f_in, rev_out_handle)
 
 
-def load_mlip_config():
-    config_filename = "config.yml"
-    config_path = Path(config_filename)  # Using pathlib
+def find_active_config():
+    """
+    Find most recently modified config.yml in any subdirectory.
+    Excludes config.yml.template.
+    Returns path or None if not found.
+    """
+    import glob as glob_module
+    configs = glob_module.glob("**/config.yml", recursive=True)
+    # Exclude template and any in hidden directories
+    configs = [c for c in configs if "template" not in c.lower() and not c.startswith('.')]
+    if not configs:
+        return None
+    return max(configs, key=os.path.getmtime)
 
+
+def load_mlip_config(config_path=None):
+    """
+    Load MLIP configuration from a config.yml file.
+
+    If config_path is provided, load from that path.
+    Otherwise, auto-discover the most recently modified config.yml.
+    """
+    if config_path is None:
+        config_path = find_active_config()
+        if config_path is None:
+            raise FileNotFoundError("No config.yml found. Run 'preprocess' first to create an analysis.")
+
+    config_path = Path(config_path)
     if not config_path.exists():
-        raise FileNotFoundError()
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
     try:
         with open(config_path, "r") as f:
             config_data = yaml.safe_load(f)
-
         return config_data
-    except:
-        raise Exception("Could not load configuration file!")
+    except Exception as e:
+        raise Exception(f"Could not load configuration file: {e}")
 
 
 def command_line_interface():
     # --- Main Parser Setup ---
     parser = argparse.ArgumentParser(
-        # Description appears at the top, explaining the script's overall purpose.
         description=(
             "=====================================================\n"
             " MLIP Dataflow & Setup Tool\n"
             "=====================================================\n"
             "This script manages the initial data setup steps for\n"
             "this viral deep sequencing pipeline. It helps you:\n"
-            "  - Check your environment and configuration.\n"
-            "  - Create a metadata file from sequencing IDs.\n"
-            "  - Arrange your FASTQ files for ingestion by the pipeline."
+            "  - Initialize a new analysis with config and metadata.\n"
+            "  - Validate your setup and prepare data for the pipeline."
         ),
-        # Epilog appears at the very bottom, after all arguments.
         epilog=(
             "-----------------------------------------------------\n"
-            "Typical Workflow Steps:\n"
-            " 1. `check`: Verify your setup (run this as much as you want!).\n"
-            "    Usage: python mlip/dataflow.py check\n"
-            " 2. `preprocess`: Create metadata sheet from sequence IDs.\n"
-            "    Usage: python mlip/dataflow.py preprocess -f <id_file>\n"
-            " 3. *Manually Edit* the generated `data/metadata.tsv`.\n"
-            " 4. `flow`: Move FASTQ files based on completed metadata.\n"
-            "    Usage: python mlip/dataflow.py flow\n\n"
-            "For detailed help on any command and its specific options:\n"
-            "  python mlip/dataflow.py <command> -h \n"
-            "e.g.:\n"
-            "  python mlip/dataflow.py preprocess -h\n"
+            "Typical Workflow:\n"
+            "  1. Run: python mlip/dataflow.py preprocess -f ids.txt --analysis my-analysis\n"
+            "  2. Edit: my-analysis/config.yml (set reference, data_root_directory)\n"
+            "  3. Edit: my-analysis/metadata.tsv (fill SampleId, Replicate columns)\n"
+            "  4. Run: python mlip/dataflow.py configure\n"
+            "  5. Run: snakemake -j $NUMBER_OF_JOBS all\n"
             "-----------------------------------------------------"
         ),
-        # This formatter preserves your line breaks in description and epilog.
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     # --- Subparsers Setup ---
-    # Give the group of commands a title and description
     subparsers = parser.add_subparsers(
-        dest="command",  # Stores the chosen command name
-        required=True,  # A command MUST be provided
+        dest="command",
+        required=True,
         title="Available Commands",
         description="Choose one of the following commands to perform a specific task:",
-        metavar="<command>",  # How the placeholder appears in the usage line
+        metavar="<command>",
     )
-
-    # --- Check Subcommand Parser ---
-    check_parser = subparsers.add_parser(
-        "check",
-        help="✅ Verify environment, config, and data setup status.",  # Concise help for the list
-        description=(  # More detailed help shown with 'check -h'
-            "Performs checks on your MLIP setup:\n"
-            " - Verifies required software and Python packages are installed.\n"
-            " - Checks if `config.yml` exists and is valid.\n"
-            " - Looks for `data/metadata.tsv` and assesses its status.\n"
-            " - Checks if data appears to have been moved by the `flow` command.\n"
-            "Run this first or if you encounter problems."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    check_parser.set_defaults(
-        func=check_cli
-    )  # No arguments specific to 'check' needed yet
 
     # --- Preprocess Subcommand Parser ---
     pre_parser = subparsers.add_parser(
         "preprocess",
-        help="📄 Create initial metadata sheet from sequencing IDs.",
-        description=(  # More detailed help shown with 'preprocess -h'
-            "Reads a simple text file containing one Sequencing ID per line \n"
-            "(e.g., 'SampleA_Seq1', matching your FASTQ file names from BaseSpace/SRA).\n"
-            "It automatically creates a template spreadsheet at `data/metadata.tsv`,\n"
-            "attempting to guess 'SampleId' based on common patterns.\n\n"
-            "--> IMPORTANT: You MUST manually open and edit `data/metadata.tsv` \n"
-            "    after running this command to verify/correct 'SampleId' and \n"
-            "    fill in the 'Replicate' column before running the `flow` command."
+        help="📄 Initialize a new analysis with config and metadata files.",
+        description=(
+            "Initializes a new analysis by:\n"
+            "  1. Creating an analysis directory\n"
+            "  2. Copying config.yml.template to {analysis}/config.yml\n"
+            "  3. Pre-filling analysis name and data root in config\n"
+            "  4. Creating a metadata spreadsheet from sequencing IDs\n\n"
+            "--> After running, edit the config.yml and metadata.tsv files,\n"
+            "    then run 'configure' to validate and prepare data."
         ),
-        epilog="Example: python mlip/dataflow.py preprocess -f ./my_sequence_ids.txt",
+        epilog="Example: python mlip/dataflow.py preprocess -f ./my_sequence_ids.txt --analysis my-analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     pre_parser.add_argument(
@@ -689,8 +710,15 @@ def command_line_interface():
         "--file",
         required=True,
         type=str,
-        metavar="<path/to/id_list.txt>",  # More descriptive placeholder
+        metavar="<path/to/id_list.txt>",
         help="REQUIRED: Path to the input text file containing Sequencing IDs (one per line).",
+    )
+    pre_parser.add_argument(
+        "--analysis",
+        required=True,
+        type=str,
+        metavar="<analysis_name>",
+        help="REQUIRED: Name for this analysis (becomes the output directory name).",
     )
     pre_parser.add_argument(
         "-k",
@@ -699,48 +727,51 @@ def command_line_interface():
         type=str,
         default="Seq",
         metavar="<key>",
-        help="Keyword in Sequencing ID that denotes the sequencing run (default: 'Seq'). Used for auto-generating SampleId (e.g., 'SampleA_Seq1' -> SampleId 'SampleA').",
+        help="Keyword in Sequencing ID for parsing (default: 'Seq'). E.g., 'SampleA_Seq1' -> SampleId 'SampleA'.",
     )
     pre_parser.set_defaults(func=preprocess_cli)
 
-    # --- Flow Subcommand Parser ---
-    flow_parser = subparsers.add_parser(
-        "flow",
-        help="🚚 Move FASTQ files based on the completed metadata sheet.",
-        description=(  # More detailed help shown with 'flow -h'
-            "Reads your completed `data/metadata.tsv` spreadsheet AND your `config.yml` file.\n"
-            "It finds the corresponding FASTQ files (R1/R2 pairs) within the \n"
-            "`data_root_directory` specified in your config, and copies them into \n"
-            "an organized structure within the `data/` directory (e.g., data/SampleA/sequencing-1/).\n"
-            "This prepares the data for the main Snakemake pipeline.\n\n"
-            "--> Ensure `config.yml` points to the correct `data_root_directory` \n"
-            "    and `data/metadata.tsv` is fully edited and saved before running."
+    # --- Configure Subcommand Parser (merged check + flow) ---
+    configure_parser = subparsers.add_parser(
+        "configure",
+        help="✅ Validate setup and prepare data for the pipeline.",
+        description=(
+            "Validates your analysis configuration and prepares data:\n"
+            "  1. Checks config.yml is valid and complete\n"
+            "  2. Verifies reference genome setup\n"
+            "  3. Validates metadata.tsv is properly populated\n"
+            "  4. If all checks pass, automatically runs data flow\n\n"
+            "By default, uses the most recently modified config.yml.\n"
+            "Use --analysis to specify a particular analysis directory."
         ),
-        epilog="Example: python mlip/dataflow.py flow",
+        epilog="Example: python mlip/dataflow.py configure",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    flow_parser.add_argument(
-        "--sra-mode", action="store_true", help="Enable SRA mode for data flowing."
+    configure_parser.add_argument(
+        "--analysis",
+        required=False,
+        type=str,
+        default=None,
+        metavar="<analysis_name>",
+        help="Analysis directory to configure (default: auto-detect most recent).",
     )
-    flow_parser.set_defaults(func=flow_cli)
+    configure_parser.add_argument(
+        "--sra-mode",
+        action="store_true",
+        help="Enable SRA mode for data flowing (instead of BaseSpace mode).",
+    )
+    configure_parser.set_defaults(func=configure_cli)
 
     # --- Argument Parsing ---
-    # If the script is called with no arguments other than the script name itself
-    # (e.g., "python3 mlip/dataflow.py" with nothing after it)
-    if len(sys.argv) == 1:  # sys.argv[0] is the script name
-        parser.print_help()  # Display the full help message
-        sys.exit(0)  # Exit gracefully
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
 
-    # Only parse args if the script is run directly (standard practice)
     if __name__ == "__main__":
         args = parser.parse_args()
-        # Execute the function associated with the chosen subcommand
         if hasattr(args, "func"):
             args.func(args)
         else:
-            # Should not happen if 'required=True' is set for subparsers,
-            # but good practice to handle case where no command is given
-            # if required=False were used.
             parser.print_help()
 
 
@@ -765,34 +796,61 @@ def print_guidance(message):
     print(f"       {message}")
 
 
-# --- CLI handler for 'check' and its worker ---
-def check_cli(args):
+# --- CLI handler for 'configure' (merged check + flow) ---
+def configure_cli(args):
     """
-    Handles the 'check' subcommand.
-    Orchestrates the detailed pipeline status reporting.
+    Handles the 'configure' subcommand.
+    Validates configuration, then runs data flow if all checks pass.
     """
+    # Determine which config to use
+    if hasattr(args, 'analysis') and args.analysis:
+        config_path = f"{args.analysis}/config.yml"
+        if not os.path.exists(config_path):
+            print(f"❌ ERROR: Config not found at {config_path}")
+            sys.exit(1)
+        print(f"Using config: {config_path}")
+    else:
+        config_path = find_active_config()
+        if not config_path:
+            print("❌ ERROR: No config.yml found.")
+            print("Run 'preprocess' first to create an analysis.")
+            sys.exit(1)
+        print(f"Using config: {config_path} (most recently modified)")
+
     print("\n🔎 Running MLIP Setup & Data Status Check...")
 
-    all_checks_clear = report_pipeline_status()
+    # Run validation (report_pipeline_status will use auto-discovery)
+    all_checks_passed = report_pipeline_status()
 
-    if all_checks_clear:
-        print(
-            "\n👍 All critical setup items appear to be in order for the next likely step."
-        )
-        print(
-            "   Please review any ℹ️ informational or ⚠️ warning messages above for further context."
-        )
-        print("   If you haven't already, run the following command:.")
-        print("")
-        print("      python mlip/dataflow.py flow")
-        print("")
-        print("   to move data out of your data root directory and into the pipeline.")
-        print("   You should then be ready to run Snakemake commands.")
+    if not all_checks_passed:
+        print("\n" + "=" * 50)
+        print("❌ Fix the issues above and run 'configure' again.")
+        print("=" * 50)
+        sys.exit(1)
+
+    # All checks passed - run flow automatically
+    print("\n" + "=" * 50)
+    print("✅ All checks passed! Running data flow...")
+    print("=" * 50 + "\n")
+
+    config = load_mlip_config(config_path)
+    analysis_dir = config.get('analysis', '')
+
+    _prepare_reference_from_zip_if_needed(config, analysis_dir)
+
+    if hasattr(args, 'sra_mode') and args.sra_mode:
+        print("Initiating SRA/Generic mode manifest generation...")
+        sra_flow(args)
     else:
-        print(
-            "\n⚠️ Some setup items need attention. Please review the ❌ errors and ⚠️ warnings above."
-        )
-    print("\n--- Check Complete ---")
+        print("Initiating BaseSpace mode manifest generation...")
+        flow(args)
+
+    # Success message
+    print("\n" + "=" * 50)
+    print("✅ Configuration complete!")
+    print("=" * 50)
+    print("\nNext step:")
+    print("  snakemake -j $NUMBER_OF_JOBS all")
 
 
 def report_pipeline_status():

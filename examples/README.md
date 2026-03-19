@@ -81,7 +81,7 @@ This example processes H5N1 samples sourced from the Sequence Read Archive (SRA)
 *   **Demonstrated Features:**
     *   Named reference usage from `references.tsv`.
     *   Configuration of a **custom `data_root_directory`**.
-    *   Ingestion of data using **SRA accessions as `SequencingId`s** (requires `python mlip/dataflow.py flow --sra-mode`).
+    *   Ingestion of data using **SRA accessions as `SequencingId`s** (requires `python mlip/dataflow.py configure --sra-mode`).
     *   Processing of multiple samples, each with a **single analytical replicate**.
 
 ### Example 5: `stephen-canine` - Canine H3N2 Analysis

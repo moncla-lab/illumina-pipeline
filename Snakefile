@@ -4,12 +4,27 @@ import os
 import sys
 import csv
 import json
+import glob as glob_module
 from itertools import product
 
 import pandas as pd
 
 
-configfile: "config.yml"
+def find_active_config():
+    """
+    Find most recently modified config.yml in any subdirectory.
+    Excludes config.yml.template.
+    Returns path or "config.yml" as fallback for backwards compatibility.
+    """
+    configs = glob_module.glob("**/config.yml", recursive=True)
+    # Exclude template and any in hidden directories
+    configs = [c for c in configs if "template" not in c.lower() and not c.startswith('.')]
+    if not configs:
+        return "config.yml"  # fallback for backwards compat
+    return max(configs, key=os.path.getmtime)
+
+
+configfile: find_active_config()
 
 # Validate that analysis directory is specified
 if 'analysis' not in config or not config['analysis']:
@@ -26,8 +41,8 @@ def data(path):
 # Check for file manifest in the analysis directory
 if not os.path.exists(data("file_manifest.json")):
     print(f"ERROR: '{data('file_manifest.json')}' not found.")
-    print("Please configure the pipeline. You can see your status by running:")
-    print("  python mlip/dataflow.py check")
+    print("Please configure the pipeline by running:")
+    print("  python mlip/dataflow.py configure")
     sys.exit(1)
 
 
