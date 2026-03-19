@@ -1,6 +1,6 @@
-g_com1
-g_com1
-g_com1
-kc_com1
-kc_com1
-rf_w1
+G_com1_Rep2
+G_Com1_Rep3
+G_Com1_Rep4
+KC_com1_R1
+KC_com1_R2
+RF_W1_Rep1
