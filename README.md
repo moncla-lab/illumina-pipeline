@@ -9,8 +9,9 @@ This `README.md` is intended to be a quickstart overview. For a deeper understan
 Requires [Bioconda](https://bioconda.github.io/) and [Git](https://git-scm.com/). We recommend [Miniconda](https://docs.anaconda.com/miniconda/) be used as your conda distribution.
 
 Create an environment with the tools used by this pipeline:
+
 ```
-conda create -n mlip python=3.12 pandas=2 altair biopython bedtools bcftools bowtie2 multiqc samtools trimmomatic snakemake=8.27 varscan entrez-direct seqkit sed csvkit perbase vapor mafft ivar
+conda env create -f environment.yml
 ```
 
 ## Usage

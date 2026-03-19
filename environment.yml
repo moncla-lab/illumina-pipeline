@@ -1,0 +1,32 @@
+name: mlip
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # Python
+  - python=3.12
+  # Python libraries
+  - pandas=2.3
+  - numpy=1.26
+  - altair=6.0
+  - biopython=1.85
+  - pyyaml=6.0
+  # Workflow
+  - snakemake=9.11
+  # Bioinformatics tools
+  - bcftools
+  - bedtools
+  - bowtie2
+  - csvkit
+  - entrez-direct
+  - ivar
+  - mafft=7.526
+  - multiqc
+  - perbase
+  - samtools
+  - seqkit=2.10
+  - trimmomatic
+  - varscan
+  - vapor
+  # Utilities
+  - sed
