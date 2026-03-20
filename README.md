@@ -42,7 +42,7 @@ There are three main concerns when configuring the pipeline to run:
 First, create a text file with your sequencing experiment IDs (one per line). Then run **preprocess** to initialize your analysis:
 
 ```
-python mlip/dataflow.py preprocess -f /path/to/sequencingExperimentIDs.txt --analysis MyAnalysis
+python mlip/dataflow.py preprocess -f /path/to/sequencingExperimentIDs.txt -a MyAnalysis
 ```
 
 This creates:
@@ -52,10 +52,10 @@ This creates:
 
 #### Configuration file
 
-Edit `MyAnalysis/config.yml` with appropriate values. For a first run, you'll likely need to adjust:
+Edit `MyAnalysis/config.yml` to set the required values:
 
-- `data_root_directory`: Path where you downloaded data from the BaseSpace downloader
-- `reference`: Reference key from `references.tsv` or path to custom reference ZIP
+- `reference`: Reference key from `references.tsv` or path to custom reference ZIP (required)
+- `data_root_directory`: Path where you downloaded data from the BaseSpace downloader (required)
 - Coverage thresholds if needed
 
 For a complete list of configuration options, see [Configuration documentation](./DOCUMENTATION.md#2-configuration).
@@ -98,11 +98,18 @@ python mlip/dataflow.py configure
 ```
 
 This command:
+
 1. Validates your configuration and metadata
 2. If all checks pass, automatically prepares data for the pipeline
 3. Reports any issues that need to be fixed
 
-Note: For SRA data instead of BaseSpace, use `--sra-mode` flag.
+By default, `configure` uses the most recently modified `config.yml`. To target a specific analysis, use `-a`:
+
+```
+python mlip/dataflow.py configure -a MyAnalysis
+```
+
+Note: For SRA data instead of BaseSpace, use `-s` / `--sra-mode` flag.
 
 ### Run the pipeline
 

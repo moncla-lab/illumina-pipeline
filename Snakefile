@@ -763,7 +763,7 @@ rule zip:
     output:
         data('project.zip')
     shell:
-        'zip -r {output} data -x "*.fastq" "*.bam" "*.sam" "*.pileup"'
+        'zip -r {output} ' + ANALYSIS_DIR + ' -x "*.fastq" "*.bam" "*.sam" "*.pileup"'
 
 def preserved_bam_input(wildcards):
     bam_filepaths = []

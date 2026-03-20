@@ -119,6 +119,7 @@ import csv
 import gzip
 import re
 import json
+import zipfile
 from pathlib import Path
 import argparse
 import subprocess
@@ -268,7 +269,7 @@ def preprocess(id_filepath, analysis_name, seq_key="Seq"):
     print("")
     print("Next steps:")
     print(f"  1. Edit {config_path} (set reference and data_root_directory)")
-    print(f"  2. Edit {metadata_path} (fill in SampleId, Replicate columns)")
+    print(f"  2. Edit {metadata_path} (verify SampleId, fill in Replicate columns)")
     print(f"  3. Run: python mlip/dataflow.py configure")
     return
 
@@ -277,7 +278,7 @@ def preprocess_cli(args):
     preprocess(
         id_filepath=args.file,
         analysis_name=args.analysis,
-        seq_key=args.key
+        seq_key=args.key,
     )
 
 
@@ -309,10 +310,10 @@ def fastq_is_low_coverage(filepath, min_reads=50):
         return True
 
 
-def flow(args):
+def flow(config_path=None):
     # manifest_samples_data will store: {sample_id: {replicate_num: [exp_details_list]}}
     manifest_samples_data = defaultdict(lambda: defaultdict(list))
-    config = load_mlip_config()
+    config = load_mlip_config(config_path)
 
     analysis_dir = config.get('analysis', '')
     if not analysis_dir:
@@ -456,9 +457,9 @@ def fastq_is_low_coverage_sra_generic(filepath_str, min_reads=50):
         return True  # Other gzip errors, assume low
 
 
-def sra_flow(args):
+def sra_flow(config_path=None):
     manifest_samples_data = defaultdict(lambda: defaultdict(list))
-    config = load_mlip_config()
+    config = load_mlip_config(config_path)
 
     analysis_dir = config.get('analysis', '')
     if not analysis_dir:
@@ -561,7 +562,19 @@ def _prepare_reference_from_zip_if_needed(config, analysis_dir):
 
     ref_dir = Path(analysis_dir) / "reference"
     shutil.rmtree(ref_dir, ignore_errors=True)
-    subprocess.run(["unzip", "-o", str(ref), "-d", analysis_dir], check=True)
+
+    # Extract zip, replacing the old "data/" prefix with the analysis directory
+    with zipfile.ZipFile(ref, 'r') as zf:
+        for member in zf.namelist():
+            # Replace leading data/ with analysis dir
+            dest = re.sub(r'^data/', f'{analysis_dir}/', member)
+            dest_path = Path(dest)
+            if member.endswith('/'):
+                dest_path.mkdir(parents=True, exist_ok=True)
+            else:
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                dest_path.write_bytes(zf.read(member))
+
     marker.touch()
 
 
@@ -697,12 +710,12 @@ def command_line_interface():
             "Initializes a new analysis by:\n"
             "  1. Creating an analysis directory\n"
             "  2. Copying config.yml.template to {analysis}/config.yml\n"
-            "  3. Pre-filling analysis name and data root in config\n"
+            "  3. Pre-filling analysis name in config\n"
             "  4. Creating a metadata spreadsheet from sequencing IDs\n\n"
-            "--> After running, edit the config.yml and metadata.tsv files,\n"
-            "    then run 'configure' to validate and prepare data."
+            "--> After running, edit config.yml (set reference and data_root_directory)\n"
+            "    and metadata.tsv, then run 'configure' to validate and prepare data."
         ),
-        epilog="Example: python mlip/dataflow.py preprocess -f ./my_sequence_ids.txt --analysis my-analysis",
+        epilog="Example: python mlip/dataflow.py preprocess -f ./my_sequence_ids.txt -a my-analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     pre_parser.add_argument(
@@ -714,6 +727,7 @@ def command_line_interface():
         help="REQUIRED: Path to the input text file containing Sequencing IDs (one per line).",
     )
     pre_parser.add_argument(
+        "-a",
         "--analysis",
         required=True,
         type=str,
@@ -748,6 +762,7 @@ def command_line_interface():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     configure_parser.add_argument(
+        "-a",
         "--analysis",
         required=False,
         type=str,
@@ -756,6 +771,7 @@ def command_line_interface():
         help="Analysis directory to configure (default: auto-detect most recent).",
     )
     configure_parser.add_argument(
+        "-s",
         "--sra-mode",
         action="store_true",
         help="Enable SRA mode for data flowing (instead of BaseSpace mode).",
@@ -819,8 +835,8 @@ def configure_cli(args):
 
     print("\n🔎 Running MLIP Setup & Data Status Check...")
 
-    # Run validation (report_pipeline_status will use auto-discovery)
-    all_checks_passed = report_pipeline_status()
+    # Run validation
+    all_checks_passed = report_pipeline_status(config_path)
 
     if not all_checks_passed:
         print("\n" + "=" * 50)
@@ -840,10 +856,10 @@ def configure_cli(args):
 
     if hasattr(args, 'sra_mode') and args.sra_mode:
         print("Initiating SRA/Generic mode manifest generation...")
-        sra_flow(args)
+        sra_flow(config_path)
     else:
         print("Initiating BaseSpace mode manifest generation...")
-        flow(args)
+        flow(config_path)
 
     # Success message
     print("\n" + "=" * 50)
@@ -853,7 +869,7 @@ def configure_cli(args):
     print("  snakemake -j $NUMBER_OF_JOBS all")
 
 
-def report_pipeline_status():
+def report_pipeline_status(config_path=None):
     """
     Performs and reports on various stages of the pipeline setup.
     Returns True if no critical errors are found, False otherwise.
@@ -865,7 +881,7 @@ def report_pipeline_status():
     # --- 1. Configuration File (`config.yml`) ---
     print_section_header("1. Configuration (`config.yml`)")
     try:
-        config = load_mlip_config()
+        config = load_mlip_config(config_path)
         print_status_item("`config.yml` found and loaded successfully.", "success")
 
         essential_keys = [
