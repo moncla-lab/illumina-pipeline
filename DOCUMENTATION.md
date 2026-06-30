@@ -92,6 +92,36 @@ These sheets have the IDs that will be consumed by the pipeline:
 
 You can now refer back to the [README](https://github.com/moncla-lab/illumina-pipeline/blob/main/README.md) for how to set up and do a first run. Just remember the directory that you used above, as that will need to go into the configuration file for the repository.
 
+### Downloading data from the Sequence Read Archive (SRA)
+
+Instead of BaseSpace, you can analyze public data from the NCBI Sequence Read Archive (SRA). This needs the NCBI SRA Toolkit, which provides `fasterq-dump`. We intentionally keep it out of the conda environment, so install the official build and configure it once (a one-time step):
+
+- [Download the SRA Toolkit](https://github.com/ncbi/sra-tools/wiki/01.-Downloading-SRA-Toolkit)
+- [Quick toolkit configuration](https://github.com/ncbi/sra-tools/wiki/03.-Quick-Toolkit-Configuration)
+
+Next, make a plain text file with one run accession per line (e.g. `SRR26513986`). You can type these in by hand or export them from the [SRA Run Selector](https://www.ncbi.nlm.nih.gov/Traces/study/). See `examples/canine-h3n2-sra/ids.txt` for an example.
+
+Then run the helper script at the root of the repository, passing your accession list:
+
+```
+./fetch-sra.sh my_accessions.txt
+```
+
+This downloads each accession into a `sra-data` folder. When it finishes it prints the exact `data_root_directory` line to copy into your `config.yml`, and it writes a starter `data/metadata.tsv` with one row per accession. Open that file and fill in the `SampleId` and `Replicate` columns by hand — for SRA, each accession is usually its own sample with a single replicate:
+
+| SequencingId | SampleId | Replicate |
+| ------------ | -------- | --------- |
+| SRR26513986  | s1       | 1         |
+| SRR26513987  | s2       | 1         |
+
+With the config pointed at your data and the metadata filled in, move the data into the pipeline — this is the same as BaseSpace except you pass the `--sra-mode` flag:
+
+```
+python mlip/dataflow.py flow --sra-mode
+```
+
+For very large batches, you may prefer to `prefetch` accessions first for resumable downloads; see the [fasterq-dump guide](https://github.com/ncbi/sra-tools/wiki/HowTo:-fasterq-dump).
+
 ## 2. Configuration
 
 We use YAML (a practice recommended by Snakemake) to configure both tools and rules. See `config.yml.template` at the root of the repository, which contains our recommended default parameters. 

@@ -53,7 +53,7 @@ We have [predefined references](./references.tsv). The simplest use case is to c
 
 #### Metadata
 
-To move data out of the data folder and into this pipeline, a text file of sequencing experiment IDs corresponding to each FASTQ dataset, one per line, must be created at a known path we'll call `/path/to/fastqDatasetIDs.txt`. Note we say FASTQ dataset as this is technically a pair of FASTQ files. It's best to pull these from either BaseSpace sample sheet CSVs or SRA accessions.
+To move data out of the data folder and into this pipeline, a text file of sequencing experiment IDs corresponding to each FASTQ dataset, one per line, must be created at a known path we'll call `/path/to/fastqDatasetIDs.txt`. Note we say FASTQ dataset as this is technically a pair of FASTQ files. It's best to pull these from either BaseSpace sample sheet CSVs or SRA accessions. For SRA data, the `./fetch-sra.sh` script downloads the FASTQs from a text file of accessions; see the [SRA documentation](./DOCUMENTATION.md#downloading-data-from-the-sequence-read-archive-sra).
 
 The first **preprocess** step looks at these IDs and builds a metadata spreadsheet at `data/metadata.tsv`:
 ```

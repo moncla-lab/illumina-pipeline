@@ -2,7 +2,7 @@
 
 This section outlines various usage scenarios for the Moncla Lab Illumina Pipeline, showcasing its flexibility and the features tested by each example configuration.
 
-There is also a bash script `sra-fetch.sh` which uses `fasterq-dump`. See here for [more information about fasterq-dump](https://github.com/ncbi/sra-tools/wiki/HowTo:-fasterq-dump). It's a bit tricky to install and due this and the fact that it's only used for examples, it's not part of the main package. All config files are as I run them locally, so paths will have to be adjusted accordingly and are only meant to serve as examples.
+For SRA examples, use the `fetch-sra.sh` script at the root of the repository to download the FASTQs; it takes a text file of run accessions and tells you where to point `data_root_directory`. See the [SRA section of the documentation](../DOCUMENTATION.md#downloading-data-from-the-sequence-read-archive-sra) for the full walkthrough, including how to install the NCBI SRA Toolkit. The small `sra-fetch.sh` script here is a simpler, self-contained example that just loops over the example `ids.txt` files. All config files are as I run them locally, so paths will have to be adjusted accordingly and are only meant to serve as examples.
 
 Each example has a dedicated directory, as wells as the following files:
 
